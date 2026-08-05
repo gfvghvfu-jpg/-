@@ -1,16 +1,8 @@
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup
-)
-
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes
-)
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 from config import BOT_TOKEN, STORE_NAME
-from database import create_database
+from database import create_database, add_user
 
 
 # القائمة الرئيسية
@@ -26,6 +18,14 @@ main_keyboard = ReplyKeyboardMarkup(
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user = update.effective_user
+
+    await add_user(
+        user.id,
+        user.username,
+        user.full_name
+    )
 
     text = f"""
 🌍 أهلاً بك في {STORE_NAME}
@@ -43,7 +43,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main():
 
-    # إنشاء قاعدة البيانات
     await create_database()
 
     app = Application.builder().token(BOT_TOKEN).build()
@@ -51,7 +50,7 @@ async def main():
     app.add_handler(CommandHandler("start", start))
 
     print("================================")
-    print(" Fluxo Store Started ")
+    print("Fluxo Store Started")
     print("================================")
 
     await app.run_polling()
