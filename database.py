@@ -58,3 +58,26 @@ async def create_database():
         await db.commit()
 
     print("Database Created Successfully")
+async def add_user(
+    telegram_id,
+    username,
+    full_name
+):
+
+    async with aiosqlite.connect(DATABASE_NAME) as db:
+
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO users
+            (telegram_id,username,full_name)
+
+            VALUES (?,?,?)
+            """,
+            (
+                telegram_id,
+                username,
+                full_name
+            )
+        )
+
+        await db.commit()
