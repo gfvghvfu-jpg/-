@@ -1,5 +1,9 @@
+import logging
+
 import aiosqlite
 from config import DATABASE_NAME
+
+logger = logging.getLogger(__name__)
 
 
 async def create_database():
@@ -57,7 +61,9 @@ async def create_database():
 
         await db.commit()
 
-    print("Database Created Successfully")
+    logger.info("Database %s ready", DATABASE_NAME)
+
+
 async def add_user(
     telegram_id,
     username,
@@ -81,3 +87,5 @@ async def add_user(
         )
 
         await db.commit()
+
+    logger.debug("User %s stored", telegram_id)

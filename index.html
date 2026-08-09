@@ -1884,6 +1884,63 @@ input[type=range]::-webkit-slider-thumb{
    ════════════════════════════════════════════════════ */
 
 // ─────────────────────────────────────────
+// ERROR + STORAGE HELPERS
+// ─────────────────────────────────────────
+function logError(where, err) {
+  console.error(`[masaar] ${where}:`, err);
+}
+function isQuotaError(e) {
+  return !!e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22);
+}
+function storageGet(key) {
+  try { return localStorage.getItem(key); }
+  catch (e) { logError(`storageGet(${key})`, e); return null; }
+}
+/** يعيد true عند النجاح، و false مع إبلاغ المستخدم عند الفشل */
+function storageSet(key, value, { silent = false } = {}) {
+  try { localStorage.setItem(key, value); return true; }
+  catch (e) {
+    logError(`storageSet(${key})`, e);
+    if (!silent) {
+      toast(isQuotaError(e)
+        ? '⚠️ مساحة التخزين امتلأت — صدّر بياناتك ثم امسح القديمة'
+        : '⚠️ تعذّر الحفظ — تحقق من إعدادات الخصوصية في المتصفح');
+    }
+    return false;
+  }
+}
+function storageRemove(key) {
+  try { localStorage.removeItem(key); }
+  catch (e) { logError(`storageRemove(${key})`, e); }
+}
+function storageKeys() {
+  try { return Object.keys(localStorage); }
+  catch (e) { logError('storageKeys', e); return []; }
+}
+/** يقرأ JSON ويعيد fallback مع تسجيل الخطأ عند التلف */
+function readJSON(key, fallback) {
+  const raw = storageGet(key);
+  if (raw == null) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed == null ? fallback : parsed;
+  } catch (e) {
+    logError(`readJSON(${key})`, e);
+    return fallback;
+  }
+}
+function writeJSON(key, value, opts) {
+  let serialized;
+  try { serialized = JSON.stringify(value); }
+  catch (e) {
+    logError(`writeJSON(${key})`, e);
+    if (!opts || !opts.silent) toast('⚠️ تعذّر تحويل البيانات للحفظ');
+    return false;
+  }
+  return storageSet(key, serialized, opts);
+}
+
+// ─────────────────────────────────────────
 // SECURITY SYSTEM — MULTI-USER
 // ─────────────────────────────────────────
 const USERS = {
@@ -1899,10 +1956,12 @@ const SECURITY = {
   _key() { return USERS[CURRENT_USER].secKey; },
 
   getState() {
-    try { const s = localStorage.getItem(this._key()); return s ? JSON.parse(s) : { attempts: 0, lockedUntil: null, unlocked: false }; }
-    catch { return { attempts: 0, lockedUntil: null, unlocked: false }; }
+    return readJSON(this._key(), { attempts: 0, lockedUntil: null, unlocked: false });
   },
-  saveState(state) { try { localStorage.setItem(this._key(), JSON.stringify(state)); } catch {} },
+  saveState(state) {
+    // فشل حفظ حالة الأمان يعني احتساب خاطئ للمحاولات — يجب إبلاغ المستخدم
+    return writeJSON(this._key(), state);
+  },
 
   isLocked() {
     const s = this.getState();
@@ -2133,7 +2192,10 @@ function lockApp() {
   // Stop canvas animation to save CPU while locked
   if (window._bgAnimFrame) { cancelAnimationFrame(window._bgAnimFrame); window._bgAnimFrame = null; }
   // إصلاح: تدمير جميع الرسوم البيانية عند القفل لمنع memory leaks
-  Object.keys(CHARTS).forEach(k => { try { CHARTS[k].destroy(); } catch {} delete CHARTS[k]; });
+  Object.keys(CHARTS).forEach(k => {
+    try { CHARTS[k].destroy(); } catch (e) { logError(`chart.destroy(${k})`, e); }
+    delete CHARTS[k];
+  });
   _doLock();
 }
 function logoutUser() {
@@ -2307,24 +2369,35 @@ function sanitizeApp() {
   });
 }
 function save() { invalidateHabitMap(); clearRateCache();
-  try { localStorage.setItem(USERS[CURRENT_USER].storageKey, JSON.stringify(APP)); }
-  catch(e) {
-    if (e.name === 'QuotaExceededError' || e.code === 22)
-      toast('⚠️ مساحة التخزين امتلأت — صدّر بياناتك ثم امسح القديمة');
-    else console.error('خطأ في الحفظ:', e);
-  }
+  return writeJSON(USERS[CURRENT_USER].storageKey, APP);
 }
 function load() {
-  try {
-    const s = localStorage.getItem(USERS[CURRENT_USER].storageKey);
-    if (s) { APP = Object.assign({ habits: [], log: {}, settings: {} }, JSON.parse(s)); sanitizeApp(); return; }
-    // legacy import for user 1
-    if (CURRENT_USER === 1) {
-      const leg = localStorage.getItem('masaar_v4');
-      if (leg) APP = Object.assign({ habits: [], log: {}, settings: {} }, JSON.parse(leg));
-      else APP = { habits: [], log: {}, settings: {} };
-    } else APP = { habits: [], log: {}, settings: {} };
-  } catch { APP = { habits: [], log: {}, settings: {} }; }
+  const key = USERS[CURRENT_USER].storageKey;
+  const empty = () => ({ habits: [], log: {}, settings: {} });
+  const parseOrRecover = (raw, srcKey) => {
+    try { return JSON.parse(raw); }
+    catch (e) {
+      logError(`load(${srcKey})`, e);
+      // نحفظ نسخة من البيانات التالفة قبل البدء من جديد، ولا نمرّ بصمت
+      storageSet(`${srcKey}__corrupt_${Date.now()}`, raw, { silent: true });
+      setTimeout(() => toast('⚠️ بيانات محفوظة تالفة — تم البدء بنسخة فارغة (النسخة التالفة محفوظة)'), 1200);
+      return null;
+    }
+  };
+
+  const s = storageGet(key);
+  if (s) {
+    const parsed = parseOrRecover(s, key);
+    APP = Object.assign(empty(), parsed || {});
+    sanitizeApp();
+    return;
+  }
+  // legacy import for user 1
+  if (CURRENT_USER === 1) {
+    const leg = storageGet('masaar_v4');
+    APP = Object.assign(empty(), (leg ? parseOrRecover(leg, 'masaar_v4') : null) || {});
+  } else APP = empty();
+  sanitizeApp();
 }
 // ─────────────────────────────────────────
 // DATA — EXPORT / IMPORT / ENCRYPT / ARCHIVE
@@ -2332,14 +2405,14 @@ function load() {
 
 /* ── helpers ── */
 function archiveKey() { return `masaar_archive_u${CURRENT_USER}`; }
-function loadArchive() { try { return JSON.parse(localStorage.getItem(archiveKey())) || {}; } catch { return {}; } }
-function saveArchive(a) { localStorage.setItem(archiveKey(), JSON.stringify(a)); }
+function loadArchive() { return readJSON(archiveKey(), {}); }
+function saveArchive(a) { return writeJSON(archiveKey(), a); }
 
 /* ── plain export ── */
 function exportData() {
   try {
-    const financeData = JSON.parse(localStorage.getItem(finKey()) || 'null');
-    const archiveData = JSON.parse(localStorage.getItem(archiveKey()) || 'null');
+    const financeData = readJSON(finKey(), null);
+    const archiveData = readJSON(archiveKey(), null);
     const exportObj = {
       _version: 2,
       _exportedAt: new Date().toISOString(),
@@ -2351,7 +2424,7 @@ function exportData() {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
     a.download = `masaar-${today()}.json`; a.click();
     toast('✓ تم التصدير (شامل المالية والأرشيف)');
-  } catch(err) { toast('خطأ في التصدير: ' + err.message); }
+  } catch(err) { logError('exportData', err); toast('خطأ في التصدير: ' + err.message); }
 }
 
 /* ── AES-GCM encryption helpers ── */
@@ -2390,8 +2463,8 @@ async function exportEncrypted() {
     const fullPayload = {
       _version: 2, _exportedAt: new Date().toISOString(),
       app: APP,
-      finance: JSON.parse(localStorage.getItem(finKey()) || 'null'),
-      archive: JSON.parse(localStorage.getItem(archiveKey()) || 'null'),
+      finance: readJSON(finKey(), null),
+      archive: readJSON(archiveKey(), null),
     };
     const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(fullPayload)));
     const payload = JSON.stringify({
@@ -2403,7 +2476,7 @@ async function exportEncrypted() {
     a.download = `masaar-enc-${today()}.masaar`; a.click();
     showEncMsg('✓ تم التصدير المشفر (شامل المالية والأرشيف) — احفظه بأمان', true);
     document.getElementById('encExportPwd').value = '';
-  } catch(e) { showEncMsg('⚠️ فشل التشفير: ' + e.message, false); }
+  } catch(e) { logError('exportEncrypted', e); showEncMsg('⚠️ فشل التشفير: ' + e.message, false); }
 }
 function showEncMsg(txt, ok) {
   const el = document.getElementById('encExportMsg');
@@ -2415,7 +2488,14 @@ function showEncMsg(txt, ok) {
 /* ── auto import: detect plain vs encrypted ── */
 async function importAuto(e) {
   const f = e.target.files[0]; if (!f) return;
-  const text = await f.text();
+  let text;
+  try { text = await f.text(); }
+  catch (err) {
+    logError('importAuto/read', err);
+    toast('⚠️ تعذّر قراءة الملف');
+    e.target.value = '';
+    return;
+  }
   try {
     const parsed = JSON.parse(text);
     if (parsed.alg && parsed.alg.startsWith('AES')) {
@@ -2427,15 +2507,18 @@ async function importAuto(e) {
     } else {
       if (parsed._version === 2 && parsed.app) {
         APP = Object.assign({ habits: [], log: {}, settings: {} }, parsed.app);
-        if (parsed.finance) localStorage.setItem(finKey(), JSON.stringify(parsed.finance));
-        if (parsed.archive) localStorage.setItem(archiveKey(), JSON.stringify(parsed.archive));
+        if (parsed.finance && !writeJSON(finKey(), parsed.finance)) return;
+        if (parsed.archive && !writeJSON(archiveKey(), parsed.archive)) return;
       } else {
         APP = Object.assign({ habits: [], log: {}, settings: {} }, parsed);
       }
       sanitizeApp(); clearRateCache();
       save(); renderAll(); switchPage('dashboard'); toast('✓ تم الاستيراد بنجاح');
     }
-  } catch { toast('⚠️ الملف غير صالح أو تالف'); }
+  } catch (err) {
+    logError('importAuto', err);
+    toast('⚠️ الملف غير صالح أو تالف: ' + (err && err.message ? err.message : err));
+  }
   e.target.value = '';
 }
 let _pendingEncImport = null;
@@ -2459,24 +2542,34 @@ function _askEncPassword() {
   });
 }
 async function importEncrypted(payload, pwd) {
+  let obj;
   try {
     const salt = new Uint8Array(b64ToBuf(payload.salt));
     const iv   = new Uint8Array(b64ToBuf(payload.iv));
     const data = b64ToBuf(payload.data);
     const key  = await deriveKey(pwd, salt);
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
-    const obj = JSON.parse(new TextDecoder().decode(plain));
+    obj = JSON.parse(new TextDecoder().decode(plain));
+  } catch (e) {
+    logError('importEncrypted/decrypt', e);
+    toast('⚠️ كلمة المرور خاطئة أو الملف تالف');
+    return;
+  }
+  try {
     // إصلاح: دعم v2 (fullPayload) وv1 (APP مباشرة)
     if (obj._version === 2 && obj.app) {
       APP = Object.assign({ habits: [], log: {}, settings: {} }, obj.app);
-      if (obj.finance) localStorage.setItem(finKey(), JSON.stringify(obj.finance));
-      if (obj.archive) localStorage.setItem(archiveKey(), JSON.stringify(obj.archive));
+      if (obj.finance && !writeJSON(finKey(), obj.finance)) return;
+      if (obj.archive && !writeJSON(archiveKey(), obj.archive)) return;
     } else {
       APP = Object.assign({ habits: [], log: {}, settings: {} }, obj);
     }
     sanitizeApp(); clearRateCache();
     save(); renderAll(); switchPage('dashboard'); toast('✓ تم فك التشفير والاستيراد بنجاح 🔓');
-  } catch { toast('⚠️ كلمة المرور خاطئة أو الملف تالف'); }
+  } catch (e) {
+    logError('importEncrypted/apply', e);
+    toast('⚠️ تم فك التشفير لكن فشل تطبيق البيانات: ' + (e && e.message ? e.message : e));
+  }
 }
 
 /* ── archive old data ── */
@@ -2484,16 +2577,13 @@ function archiveOldData() {
   const days = parseInt(document.getElementById('archiveDays')?.value || 90);
   const cutoff = addDays(today(), -days);
   const archive = loadArchive();
-  let moved = 0;
-  Object.keys(APP.log).forEach(d => {
-    if (d < cutoff) {
-      archive[d] = APP.log[d];
-      delete APP.log[d];
-      moved++;
-    }
-  });
+  const moving = Object.keys(APP.log).filter(d => d < cutoff);
+  const moved = moving.length;
   if (!moved) { toast('لا توجد سجلات أقدم من ' + days + ' يوم'); return; }
-  saveArchive(archive);
+  moving.forEach(d => { archive[d] = APP.log[d]; });
+  // لا نحذف من APP.log قبل نجاح كتابة الأرشيف — تجنّب فقدان البيانات
+  if (!saveArchive(archive)) return;
+  moving.forEach(d => { delete APP.log[d]; });
   save();
   toast(`✓ تم أرشفة ${moved} يوم — مساحة localStorage خُففت`);
   renderSettings();
@@ -2525,7 +2615,7 @@ function clearArchive() {
   const count = Object.keys(loadArchive()).length;
   if (!count) { toast('الأرشيف فارغ أصلاً'); return; }
   if (!confirm(`سيتم حذف ${count} يوم من الأرشيف نهائياً. هل أنت متأكد؟`)) return;
-  localStorage.removeItem(archiveKey());
+  storageRemove(archiveKey());
   toast('تم حذف الأرشيف');
   renderSettings();
 }
@@ -2533,7 +2623,7 @@ function clearAll() {
   if (!confirm('⚠️ سيتم حذف جميع البيانات الحالية (العادات، السجلات، المالية). الأرشيف يبقى سليماً.\n\nهل أنت متأكد تماماً؟')) return;
   APP = { habits: [], log: {}, settings: {} };
   // إصلاح: مسح البيانات المالية أيضاً عند clearAll
-  localStorage.removeItem(finKey());
+  storageRemove(finKey());
   save(); clearRateCache();
   UI.page = 'dashboard';
   switchPage('dashboard');
@@ -3668,10 +3758,10 @@ function buildCorrMatrix() {
 function finKey() { return `masaar_finance_u${CURRENT_USER}`; }
 
 function finLoad() {
-  try { return JSON.parse(localStorage.getItem(finKey())) || {}; } catch { return {}; }
+  return readJSON(finKey(), {});
 }
 function finSave(data) {
-  localStorage.setItem(finKey(), JSON.stringify(data));
+  return writeJSON(finKey(), data);
 }
 
 function finGetState() {
@@ -3930,13 +4020,13 @@ function renderFinance() {
   const daysLeftCur  = daysInCalMon - todayDayNum;
   if (daysLeftCur <= 3 && remaining < base * 0.3) {
     const MWKEY = 'masaar_mwarn_' + todayKey + '_u' + CURRENT_USER;
-    if (!localStorage.getItem(MWKEY)) {
-      localStorage.setItem(MWKEY, '1');
+    if (!storageGet(MWKEY)) {
+      storageSet(MWKEY, '1', { silent: true });
       const cutoff = addDays(todayKey, -7);
-      Object.keys(localStorage).forEach(k => {
+      storageKeys().forEach(k => {
         if (k.startsWith('masaar_mwarn_') && k.endsWith(`_u${CURRENT_USER}`)) {
           const dp = k.replace('masaar_mwarn_','').replace(`_u${CURRENT_USER}`,'');
-          if (dp < cutoff) localStorage.removeItem(k);
+          if (dp < cutoff) storageRemove(k);
         }
       });
       setTimeout(() => showArchivePrompt_custom('⚠️',
@@ -4887,12 +4977,13 @@ function changePassword() {
   USERS[CURRENT_USER].password = newVal;
 
   // حفظ كلمة السر الجديدة في localStorage — إصلاح: استخدام String(CURRENT_USER) لضمان تطابق المفتاح
-  try {
-    const pwStore = JSON.parse(localStorage.getItem('masaar_pw_store') || '{}');
-    pwStore[String(CURRENT_USER)] = newVal;
-    pwStore[CURRENT_USER] = newVal; // حفظ بالنوعين لضمان التوافق
-    localStorage.setItem('masaar_pw_store', JSON.stringify(pwStore));
-  } catch(e) { showMsg('تم التحديث في الجلسة الحالية فقط — تعذّر الحفظ الدائم', false); return; }
+  const pwStore = readJSON('masaar_pw_store', {});
+  pwStore[String(CURRENT_USER)] = newVal;
+  pwStore[CURRENT_USER] = newVal; // حفظ بالنوعين لضمان التوافق
+  if (!writeJSON('masaar_pw_store', pwStore, { silent: true })) {
+    showMsg('تم التحديث في الجلسة الحالية فقط — تعذّر الحفظ الدائم', false);
+    return;
+  }
 
   document.getElementById('cpOld').value = '';
   document.getElementById('cpNew').value = '';
@@ -4910,10 +5001,8 @@ function renderLoginHistory() {
   const allHistory = [];
   [1, 2].forEach(uid => {
     const key = USERS[uid].secKey;
-    try {
-      const s = JSON.parse(localStorage.getItem(key) || '{}');
-      (s.loginHistory || []).forEach(entry => allHistory.push({ ...entry, uid }));
-    } catch {}
+    const s = readJSON(key, {});
+    (s.loginHistory || []).forEach(entry => allHistory.push({ ...entry, uid }));
   });
   allHistory.sort((a, b) => b.ts - a.ts);
 
@@ -4951,16 +5040,15 @@ function renderLoginHistory() {
 
 function clearLoginHistory() {
   if (!confirm('مسح سجل تسجيلات الدخول لجميع المستخدمين؟ لا يمكن التراجع.')) return;
+  let failed = 0;
   [1, 2].forEach(uid => {
     const key = USERS[uid].secKey;
-    try {
-      const s = JSON.parse(localStorage.getItem(key) || '{}');
-      s.loginHistory = [];
-      localStorage.setItem(key, JSON.stringify(s));
-    } catch {}
+    const s = readJSON(key, {});
+    s.loginHistory = [];
+    if (!writeJSON(key, s)) failed++;
   });
   renderLoginHistory();
-  toast('تم مسح السجل');
+  toast(failed ? '⚠️ تعذّر مسح السجل لـ ' + failed + ' مستخدم' : 'تم مسح السجل');
 }
 
 // ─────────────────────────────────────────
@@ -5748,16 +5836,16 @@ function checkStreakWarnings() {
   if (hour < 21) return;
   const t = today();
   const WARN_KEY = `masaar_streak_warn_${t}_u${CURRENT_USER}`;
-  if (localStorage.getItem(WARN_KEY)) return; // تحقق مبكر قبل أي عمل ثقيل
+  if (storageGet(WARN_KEY)) return; // تحقق مبكر قبل أي عمل ثقيل
   const atRisk = APP.habits.filter(h => getStreak(h.id) >= 3 && !isCompleted(h.id, t));
   if (!atRisk.length) return;
-  localStorage.setItem(WARN_KEY, '1');
+  storageSet(WARN_KEY, '1', { silent: true });
   // تنظيف مفاتيح قديمة — مرة واحدة فقط عند الحاجة
   const cutoff = addDays(t, -2);
-  Object.keys(localStorage).forEach(k => {
+  storageKeys().forEach(k => {
     if (k.startsWith('masaar_streak_warn_') && k.endsWith(`_u${CURRENT_USER}`)) {
       const dp = k.replace('masaar_streak_warn_','').replace(`_u${CURRENT_USER}`,'');
-      if (dp < cutoff) localStorage.removeItem(k);
+      if (dp < cutoff) storageRemove(k);
     }
   });
   const names = atRisk.slice(0, 2).map(h => esc(h.name)).join('، ') + (atRisk.length > 2 ? ` و${atRisk.length - 2} أخرى` : '');
@@ -5821,13 +5909,13 @@ function checkWeeklySummary() {
   if (dow !== 5 && dow !== 6) return;
   const t = today();
   const KEY = `masaar_wsummary_${t}_u${CURRENT_USER}`;
-  if (localStorage.getItem(KEY)) return;
-  localStorage.setItem(KEY, '1');
+  if (storageGet(KEY)) return;
+  storageSet(KEY, '1', { silent: true });
   const cutoff = addDays(t, -14);
-  Object.keys(localStorage).forEach(k => {
+  storageKeys().forEach(k => {
     if (k.startsWith('masaar_wsummary_') && k.endsWith(`_u${CURRENT_USER}`)) {
       const datepart = k.replace('masaar_wsummary_','').replace(`_u${CURRENT_USER}`,'');
-      if (datepart < cutoff) localStorage.removeItem(k);
+      if (datepart < cutoff) storageRemove(k);
     }
   });
   const days7 = getLast(7);
@@ -5846,12 +5934,12 @@ function checkAutoArchive() {
   const THRESHOLD = 90; // days considered "old"
 
   // Only check once per day; guard against clock rollback
-  const lastCheck = localStorage.getItem(CHECK_KEY);
+  const lastCheck = storageGet(CHECK_KEY);
   const todayStr = today();
   if (lastCheck === todayStr) return;
   // Prevent rollback: if stored date is in the future, keep it (don't allow past-dating)
   if (lastCheck && lastCheck > todayStr) return;
-  localStorage.setItem(CHECK_KEY, todayStr);
+  storageSet(CHECK_KEY, todayStr, { silent: true });
 
   // Count log entries older than threshold
   const cutoff = addDays(todayStr, -THRESHOLD);
@@ -5896,13 +5984,14 @@ function showArchivePrompt(count, days) {
 function confirmAutoArchive(days) {
   const cutoff = addDays(today(), -days);
   const archive = loadArchive();
-  let moved = 0;
-  Object.keys(APP.log).forEach(d => {
-    if (d < cutoff) { archive[d] = APP.log[d]; delete APP.log[d]; moved++; }
-  });
-  saveArchive(archive); save();
+  const moving = Object.keys(APP.log).filter(d => d < cutoff);
+  moving.forEach(d => { archive[d] = APP.log[d]; });
+  // الحذف فقط بعد تأكيد كتابة الأرشيف
+  if (!saveArchive(archive)) return;
+  moving.forEach(d => { delete APP.log[d]; });
+  save();
   dismissArchiveBanner();
-  toast(`✓ تم أرشفة ${moved} يوم بنجاح — مساحة التطبيق أصبحت أخف`);
+  toast(`✓ تم أرشفة ${moving.length} يوم بنجاح — مساحة التطبيق أصبحت أخف`);
 }
 
 function dismissArchiveBanner() {
@@ -5913,13 +6002,21 @@ function dismissArchiveBanner() {
 }
 
 function loadSavedPasswords() {
-  try {
-    const pw = JSON.parse(localStorage.getItem('masaar_pw_store') || '{}');
-    // إصلاح: التحقق بكلا النوعين (رقم وstring) لأن JSON يحوّل المفاتيح لـ string
-    if (pw[1] || pw['1']) USERS[1].password = pw[1] || pw['1'];
-    if (pw[2] || pw['2']) USERS[2].password = pw[2] || pw['2'];
-  } catch {}
+  const pw = readJSON('masaar_pw_store', {});
+  // إصلاح: التحقق بكلا النوعين (رقم وstring) لأن JSON يحوّل المفاتيح لـ string
+  if (pw[1] || pw['1']) USERS[1].password = pw[1] || pw['1'];
+  if (pw[2] || pw['2']) USERS[2].password = pw[2] || pw['2'];
 }
+// إبلاغ عن أي خطأ غير ملتقط بدل إخفائه
+window.addEventListener('error', ev => {
+  logError('window.onerror', ev.error || ev.message);
+  toast('⚠️ حدث خطأ غير متوقع — راجع الوحدة الطرفية للتفاصيل');
+});
+window.addEventListener('unhandledrejection', ev => {
+  logError('unhandledrejection', ev.reason);
+  toast('⚠️ فشلت عملية غير متزامنة — راجع الوحدة الطرفية للتفاصيل');
+});
+
 initBgCanvas();
 loadSavedPasswords();
 initLockScreen();
