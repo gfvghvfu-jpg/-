@@ -1884,8 +1884,67 @@ input[type=range]::-webkit-slider-thumb{
    ════════════════════════════════════════════════════ */
 
 // ─────────────────────────────────────────
+// SHARED UTILITIES
+// ─────────────────────────────────────────
+const DAY_MS = 86400000;
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+function isoDate(y, m, d) { return `${y}-${pad2(m)}-${pad2(d)}`; }
+function isoParts(iso) { return iso.split('-').map(Number); }
+function isoToUTC(iso) { const [y, m, d] = isoParts(iso); return Date.UTC(y, m - 1, d); }
+function daysBetween(fromIso, toIso) { return Math.round((isoToUTC(toIso) - isoToUTC(fromIso)) / DAY_MS); }
+function daysInMonth(y, m) { return new Date(y, m, 0).getDate(); } // m: 1..12
+function shiftMonth(y, m, delta) { const i = (m - 1) + delta; return [y + Math.floor(i / 12), ((i % 12) + 12) % 12 + 1]; }
+function round(n, digits = 3) { return parseFloat(Number(n).toFixed(digits)); }
+
+function lsGet(key, fallback = null) {
+  try { const raw = localStorage.getItem(key); return raw === null ? fallback : (JSON.parse(raw) ?? fallback); }
+  catch { return fallback; }
+}
+function lsSet(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; }
+}
+function userKey(suffix) { return `masaar_${suffix}_u${CURRENT_USER}`; }
+
+function hasDailyFlag(family, date) { return !!localStorage.getItem(userKey(`${family}_${date}`)); }
+
+// يُعيد true مرة واحدة فقط لكل يوم لكل مستخدم، وينظف المفاتيح الأقدم من keepDays
+function claimDailyFlag(family, date, keepDays) {
+  if (hasDailyFlag(family, date)) return false;
+  localStorage.setItem(userKey(`${family}_${date}`), '1');
+  const cutoff = addDays(date, -keepDays);
+  const prefix = `masaar_${family}_`, suffix = `_u${CURRENT_USER}`;
+  Object.keys(localStorage).forEach(k => {
+    if (k.startsWith(prefix) && k.endsWith(suffix)) {
+      const datePart = k.slice(prefix.length, k.length - suffix.length);
+      if (datePart < cutoff) localStorage.removeItem(k);
+    }
+  });
+  return true;
+}
+
+// رسالة مؤقتة داخل عنصر — تختفي تلقائياً
+function flashMsg(el, txt, ok = true, ms = 3000) {
+  if (!el) return;
+  el.style.display = 'block';
+  el.style.color = ok ? 'var(--gr)' : 'var(--re)';
+  el.textContent = txt;
+  setTimeout(() => { el.style.display = 'none'; }, ms);
+}
+
+function downloadFile(content, filename, mime) {
+  const url = URL.createObjectURL(new Blob([content], { type: mime }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ─────────────────────────────────────────
 // SECURITY SYSTEM — MULTI-USER
 // ─────────────────────────────────────────
+const PW_STORE_KEY = 'masaar_pw_store';
 const USERS = {
   1: { name: 'محمود', nameEn: 'Mahmood', avatar: 'م', password: 'Oman@123', color: 'linear-gradient(135deg,#6e64ff,#28d4f5)', storageKey: 'masaar_pro_v3', secKey: 'masaar_security_u1' },
   2: { name: 'عمر',   nameEn: 'Omar',    avatar: 'ع', password: 'amr14444', color: 'linear-gradient(135deg,#ff7b3d,#f45cd4)', storageKey: 'masaar_pro_v3_u2', secKey: 'masaar_security_u2' },
@@ -1898,11 +1957,8 @@ const SECURITY = {
 
   _key() { return USERS[CURRENT_USER].secKey; },
 
-  getState() {
-    try { const s = localStorage.getItem(this._key()); return s ? JSON.parse(s) : { attempts: 0, lockedUntil: null, unlocked: false }; }
-    catch { return { attempts: 0, lockedUntil: null, unlocked: false }; }
-  },
-  saveState(state) { try { localStorage.setItem(this._key(), JSON.stringify(state)); } catch {} },
+  getState() { return lsGet(this._key(), null) || { attempts: 0, lockedUntil: null, unlocked: false }; },
+  saveState(state) { lsSet(this._key(), state); },
 
   isLocked() {
     const s = this.getState();
@@ -1952,15 +2008,7 @@ function selectUser(uid) {
   if (!window._clockInterval) window._clockInterval = setInterval(updateClock, 15000);
   CURRENT_USER = uid;
   document.querySelectorAll('.user-opt').forEach((el,i) => el.classList.toggle('sel', i+1===uid));
-  // reset form state per user
-  const pwInp = document.getElementById('pwInput');
-  const errMsg = document.getElementById('errMsg');
-  const warnMsg = document.getElementById('warnMsg');
-  const loginBtn = document.getElementById('loginBtn');
-  if (pwInp) pwInp.value = '';
-  if (errMsg) errMsg.classList.remove('show');
-  if (warnMsg) warnMsg.classList.remove('show');
-  if (loginBtn) { loginBtn.disabled = false; loginBtn.innerHTML = '<i class="ti ti-lock-open"></i>دخول'; }
+  resetLoginForm();
   if (SECURITY.isLocked()) { showLockedState(); }
   else {
     const lf = document.getElementById('loginForm');
@@ -1969,6 +2017,18 @@ function selectUser(uid) {
     if (ls) ls.classList.remove('show');
     updateAttemptsUI();
   }
+}
+
+// تفريغ حقل كلمة السر وإخفاء رسائل الخطأ/التحذير وإعادة تفعيل زر الدخول
+function resetLoginForm({ focus = false } = {}) {
+  const pwInp = document.getElementById('pwInput');
+  const errMsg = document.getElementById('errMsg');
+  const warnMsg = document.getElementById('warnMsg');
+  const loginBtn = document.getElementById('loginBtn');
+  if (pwInp) { pwInp.value = ''; if (focus) setTimeout(() => pwInp.focus(), 300); }
+  if (errMsg) errMsg.classList.remove('show');
+  if (warnMsg) warnMsg.classList.remove('show');
+  if (loginBtn) { loginBtn.disabled = false; loginBtn.innerHTML = '<i class="ti ti-lock-open"></i>دخول'; }
 }
 
 function generateLockParticles() {
@@ -2048,7 +2108,7 @@ function updateCountdownDisplay() {
   const m = Math.floor((rem % 3600000) / 60000);
   const s = Math.floor((rem % 60000) / 1000);
   document.getElementById('lockCountdown').innerHTML =
-    `<span>${String(h).padStart(2,'0')}</span>:<span>${String(m).padStart(2,'0')}</span>:<span>${String(s).padStart(2,'0')}</span>`;
+    `<span>${pad2(h)}</span>:<span>${pad2(m)}</span>:<span>${pad2(s)}</span>`;
 }
 
 function togglePwVisibility() {
@@ -2119,14 +2179,7 @@ function _doLock() {
   document.getElementById('app').classList.remove('visible');
   const ls = document.getElementById('lockScreen');
   ls.style.display = 'flex'; ls.classList.remove('hiding');
-  const pwInp = document.getElementById('pwInput');
-  if (pwInp) { pwInp.value = ''; setTimeout(() => pwInp.focus(), 300); }
-  const errMsg = document.getElementById('errMsg');
-  const warnMsg = document.getElementById('warnMsg');
-  const loginBtn = document.getElementById('loginBtn');
-  if (errMsg) errMsg.classList.remove('show');
-  if (warnMsg) warnMsg.classList.remove('show');
-  if (loginBtn) { loginBtn.disabled = false; loginBtn.innerHTML = '<i class="ti ti-lock-open"></i>دخول'; }
+  resetLoginForm({ focus: true });
   updateAttemptsUI();
 }
 function lockApp() {
@@ -2211,8 +2264,8 @@ function initBgCanvas() {
 const ICONS_LIST = ['ti-droplet','ti-book','ti-run','ti-heartbeat','ti-moon','ti-apple','ti-pencil','ti-brain','ti-yoga','ti-sun','ti-music','ti-coffee','ti-phone-off','ti-walk','ti-bicycle','ti-dumbbell','ti-pill','ti-plant-2','ti-language','ti-code','ti-chef-hat','ti-dog','ti-flame','ti-star','ti-prayer','ti-cash','ti-camera','ti-microphone','ti-shield','ti-trophy'];
 const COLORS_LIST = ['#6e64ff','#22d97a','#ffb830','#ff4f6d','#28d4f5','#f45cd4','#b86bff','#ff7b3d','#00e5c3','#90cc3a','#ff9500','#5bc8ff'];
 const WEEKDAYS_S = ['أحد','اثنين','ثلاثاء','أربعاء','خميس','جمعة','سبت'];
-const WEEKDAYS_CAL = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت']; // للتقويم الشهري
 const WEEKDAYS_F = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+const WEEKDAYS_CAL = WEEKDAYS_F; // للتقويم الشهري
 const MONTHS_F = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const MOODS_EMOJI = ['','😞','😐','🙂','😊','🤩'];
 const MOODS_TXT = ['','سيء','عادي','جيد','رائع','ممتاز'];
@@ -2331,25 +2384,21 @@ function load() {
 // ─────────────────────────────────────────
 
 /* ── helpers ── */
-function archiveKey() { return `masaar_archive_u${CURRENT_USER}`; }
-function loadArchive() { try { return JSON.parse(localStorage.getItem(archiveKey())) || {}; } catch { return {}; } }
-function saveArchive(a) { localStorage.setItem(archiveKey(), JSON.stringify(a)); }
+function archiveKey() { return userKey('archive'); }
+function loadArchive() { return lsGet(archiveKey(), {}) || {}; }
+function saveArchive(a) { lsSet(archiveKey(), a); }
 
 /* ── plain export ── */
 function exportData() {
   try {
-    const financeData = JSON.parse(localStorage.getItem(finKey()) || 'null');
-    const archiveData = JSON.parse(localStorage.getItem(archiveKey()) || 'null');
     const exportObj = {
       _version: 2,
       _exportedAt: new Date().toISOString(),
       app: APP,
-      finance: financeData,
-      archive: archiveData,
+      finance: lsGet(finKey()),
+      archive: lsGet(archiveKey()),
     };
-    const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = `masaar-${today()}.json`; a.click();
+    downloadFile(JSON.stringify(exportObj, null, 2), `masaar-${today()}.json`, 'application/json');
     toast('✓ تم التصدير (شامل المالية والأرشيف)');
   } catch(err) { toast('خطأ في التصدير: ' + err.message); }
 }
@@ -2390,17 +2439,15 @@ async function exportEncrypted() {
     const fullPayload = {
       _version: 2, _exportedAt: new Date().toISOString(),
       app: APP,
-      finance: JSON.parse(localStorage.getItem(finKey()) || 'null'),
-      archive: JSON.parse(localStorage.getItem(archiveKey()) || 'null'),
+      finance: lsGet(finKey()),
+      archive: lsGet(archiveKey()),
     };
     const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(fullPayload)));
     const payload = JSON.stringify({
       v: 2, alg: 'AES-GCM-256-PBKDF2-200k',
       salt: bufToB64(salt.buffer), iv: bufToB64(iv.buffer), data: bufToB64(cipher)
     });
-    const blob = new Blob([payload], { type: 'application/octet-stream' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = `masaar-enc-${today()}.masaar`; a.click();
+    downloadFile(payload, `masaar-enc-${today()}.masaar`, 'application/octet-stream');
     showEncMsg('✓ تم التصدير المشفر (شامل المالية والأرشيف) — احفظه بأمان', true);
     document.getElementById('encExportPwd').value = '';
   } catch(e) { showEncMsg('⚠️ فشل التشفير: ' + e.message, false); }
@@ -2427,8 +2474,8 @@ async function importAuto(e) {
     } else {
       if (parsed._version === 2 && parsed.app) {
         APP = Object.assign({ habits: [], log: {}, settings: {} }, parsed.app);
-        if (parsed.finance) localStorage.setItem(finKey(), JSON.stringify(parsed.finance));
-        if (parsed.archive) localStorage.setItem(archiveKey(), JSON.stringify(parsed.archive));
+        if (parsed.finance) lsSet(finKey(), parsed.finance);
+        if (parsed.archive) lsSet(archiveKey(), parsed.archive);
       } else {
         APP = Object.assign({ habits: [], log: {}, settings: {} }, parsed);
       }
@@ -2469,8 +2516,8 @@ async function importEncrypted(payload, pwd) {
     // إصلاح: دعم v2 (fullPayload) وv1 (APP مباشرة)
     if (obj._version === 2 && obj.app) {
       APP = Object.assign({ habits: [], log: {}, settings: {} }, obj.app);
-      if (obj.finance) localStorage.setItem(finKey(), JSON.stringify(obj.finance));
-      if (obj.archive) localStorage.setItem(archiveKey(), JSON.stringify(obj.archive));
+      if (obj.finance) lsSet(finKey(), obj.finance);
+      if (obj.archive) lsSet(archiveKey(), obj.archive);
     } else {
       APP = Object.assign({ habits: [], log: {}, settings: {} }, obj);
     }
@@ -2503,9 +2550,8 @@ function archiveOldData() {
 function exportArchive() {
   const archive = loadArchive();
   if (!Object.keys(archive).length) { toast('الأرشيف فارغ'); return; }
-  const blob = new Blob([JSON.stringify({ type: 'masaar_archive', user: CURRENT_USER, exported: today(), log: archive }, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-  a.download = `masaar-archive-${today()}.json`; a.click();
+  const payload = JSON.stringify({ type: 'masaar_archive', user: CURRENT_USER, exported: today(), log: archive }, null, 2);
+  downloadFile(payload, `masaar-archive-${today()}.json`, 'application/json');
   toast('✓ تم تصدير الأرشيف');
 }
 
@@ -2545,15 +2591,11 @@ function clearAll() {
 // ─────────────────────────────────────────
 function today() {
   // ISO محلي صحيح بغض النظر عن timezone المتصفح
-  const n = new Date();
-  const y = n.getFullYear();
-  const mo = String(n.getMonth() + 1).padStart(2, '0');
-  const d  = String(n.getDate()).padStart(2, '0');
-  return `${y}-${mo}-${d}`;
+  return dStr(new Date());
 }
 function dStr(d) {
   if (!(d instanceof Date)) return d;
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return isoDate(d.getFullYear(), d.getMonth() + 1, d.getDate());
 }
 function getLast(n) {
   // إصلاح إضافي: استخدام today()+addDays() لضمان اتساق التاريخ مع بقية الكود
@@ -2563,16 +2605,13 @@ function getLast(n) {
   return result;
 }
 function isoToDate(iso) {
-  const [y, m, d] = iso.split('-').map(Number);
   // UTC لتجنب الانزياح الزمني
-  return new Date(Date.UTC(y, m - 1, d));
+  return new Date(isoToUTC(iso));
 }
 function addDays(iso, n) {
   // استخدام UTC لتجنب خطأ التوقيت الصيفي DST
-  const [y, mo, d] = iso.split('-').map(Number);
-  const utc = Date.UTC(y, mo - 1, d + n);
-  const dt = new Date(utc);
-  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,'0')}-${String(dt.getUTCDate()).padStart(2,'0')}`;
+  const dt = new Date(isoToUTC(iso) + n * DAY_MS);
+  return isoDate(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());
 }
 let _genIdCounter = 0;
 function genId() {
@@ -2593,6 +2632,11 @@ function formatDateFull(iso) {
 function formatDateShort(iso) {
   try { return isoToDate(iso).toLocaleDateString('ar-SA', { month: 'short', day: 'numeric' }); }
   catch { return iso; }
+}
+// مثال: "الأحد 9 أغسطس"
+function formatDayMonth(iso) {
+  const dt = isoToDate(iso);
+  return `${WEEKDAYS_F[dt.getUTCDay()]} ${dt.getUTCDate()} ${MONTHS_F[dt.getUTCMonth()]}`;
 }
 
 // ─────────────────────────────────────────
@@ -2710,7 +2754,7 @@ function getBestStreak(hid) {
   return best;
 }
 // getRate moved above with caching
-function getDayRate(date) { const t = today(); if (date > t) return 0; if (!APP.habits.length) return 0; const done = APP.habits.filter(h => isCompleted(h.id, date)).length; return parseFloat((done / APP.habits.length * 100).toFixed(1)); }
+function getDayRate(date) { const t = today(); if (date > t) return 0; if (!APP.habits.length) return 0; const done = APP.habits.filter(h => isCompleted(h.id, date)).length; return round(done / APP.habits.length * 100, 1); }
 function getWeekPattern(hid, days) {
   const c = Array(7).fill(0), t = Array(7).fill(0);
   for (const d of days) { const w = isoToDate(d).getUTCDay(); t[w]++; if (isCompleted(hid, d)) c[w]++; }
@@ -2730,7 +2774,7 @@ function getRate(hid, days) {
   const key = `${hid}|${past[0]}|${past[past.length-1]}|${past.length}`;
   if (_rateCache.has(key)) return _rateCache.get(key);
   const done = past.filter(d => isCompleted(hid, d)).length;
-  const r = parseFloat((done / past.length * 100).toFixed(1));
+  const r = round(done / past.length * 100, 1);
   if (_rateCache.size >= _RATE_CACHE_MAX) _rateCache.clear();
   _rateCache.set(key, r); return r;
 }
@@ -2741,10 +2785,10 @@ function getRateWithReliability(hid, days) {
   const past = days.filter(d => d <= t);
   if (!past.length) return { rate: 0, reliability: 0, label: 'لا بيانات' };
   const done = past.filter(d => isCompleted(hid, d)).length;
-  const rate = parseFloat((done / past.length * 100).toFixed(1));
+  const rate = round(done / past.length * 100, 1);
   // effectiveDays: الأيام منذ إنشاء العادة أو الأيام المطلوبة أيهما أقل
   const createdAt = habit?.createdAt || past[0];
-  const daysSinceCreation = Math.max(1, Math.round((isoToDate(t) - isoToDate(createdAt)) / 86400000) + 1);
+  const daysSinceCreation = Math.max(1, daysBetween(createdAt, t) + 1);
   const effectiveDays = Math.min(daysSinceCreation, past.length);
   const reliability = Math.min(effectiveDays / 30, 1); // 0→1 خلال أول 30 يوم
   let label;
@@ -2830,7 +2874,7 @@ function expSmooth(a, alpha = null) {
   const init = a.length >= 3 ? mean(a.slice(0, 3)) : a[0];
   const r = [parseFloat(init.toFixed(3))];
   for (let i = 1; i < a.length; i++)
-    r.push(parseFloat((alpha * a[i] + (1 - alpha) * r[i - 1]).toFixed(3)));
+    r.push(round(alpha * a[i] + (1 - alpha) * r[i - 1]));
   return r;
 }
 function corrWarning(days) {
@@ -2865,7 +2909,7 @@ function corr(h1, h2, days) {
   const spurious = varX < 0.1 || varY < 0.1; // mean < 0.15 أو > 0.85
   const num = x.reduce((a, xi, i) => a + (xi - mx) * (y[i] - my), 0);
   const den = Math.sqrt(x.reduce((a, xi) => a + (xi - mx) ** 2, 0) * y.reduce((a, yi) => a + (yi - my) ** 2, 0));
-  const r = den < 1e-10 ? 0 : parseFloat((num / den).toFixed(3));
+  const r = den < 1e-10 ? 0 : round(num / den);
   const pValue = corrPValue(r, past.length);
   const result = { r, spurious, pValue };
   _corrCache.set(key, result);
@@ -2889,7 +2933,7 @@ function weightedRate(hid, days) {
     wSum += isCompleted(hid, d) ? w : 0;
     wTotal += w;
   });
-  return wTotal > 0 ? parseFloat((wSum / wTotal * 100).toFixed(1)) : 0;
+  return wTotal > 0 ? round(wSum / wTotal * 100, 1) : 0;
 }
 
 // كشف نمط التعب: هل ينخفض الالتزام دورياً في نفس اليوم؟
@@ -2908,9 +2952,8 @@ function fatiguePattern(hid, days) {
   if (validRates.length < 4) return null;
   const avg = mean(validRates);
   const worstDay = rates.reduce((best, r, i) => (r !== null && (best === -1 || r < rates[best])) ? i : best, -1);
-  const DAYS_AR = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
   if (worstDay !== -1 && rates[worstDay] !== null && rates[worstDay] < avg - 0.15) {
-    return { day: DAYS_AR[worstDay], rate: Math.round(rates[worstDay] * 100), avg: Math.round(avg * 100) };
+    return { day: WEEKDAYS_F[worstDay], rate: Math.round(rates[worstDay] * 100), avg: Math.round(avg * 100) };
   }
   return null;
 }
@@ -2936,7 +2979,7 @@ function moodHabitCorr(hid, days) {
   if (varDone < 0.05) return null; // بيانات ثنائية غير متباينة → ارتباط زائف
   const num = moodPairs.reduce((a, p) => a + (p.mood - mx) * (p.done - my), 0);
   const den = Math.sqrt(moodPairs.reduce((a, p) => a + (p.mood - mx) ** 2, 0) * moodPairs.reduce((a, p) => a + (p.done - my) ** 2, 0));
-  const r = den < 1e-10 ? 0 : parseFloat((num / den).toFixed(2));
+  const r = den < 1e-10 ? 0 : round(num / den, 2);
   return { r, pValue: corrPValue(r, moodPairs.length), n: moodPairs.length };
 }
 
@@ -2962,19 +3005,18 @@ function getDayScore(date) {
 // مقارنة مالية شهر بشهر
 function finMonthOverMonth(state) {
   const t = today();
-  const [ty, tm] = t.split('-').map(Number);
-  const curPrefix  = `${ty}-${String(tm).padStart(2,'0')}`;
+  const [ty, tm] = isoParts(t);
+  const curPrefix  = `${ty}-${pad2(tm)}`;
   // الشهر السابق بشكل آمن
-  const prevYear  = tm === 1 ? ty - 1 : ty;
-  const prevMonth = tm === 1 ? 12 : tm - 1;
-  const prevPrefix = `${prevYear}-${String(prevMonth).padStart(2,'0')}`;
+  const [prevYear, prevMonth] = shiftMonth(ty, tm, -1);
+  const prevPrefix = `${prevYear}-${pad2(prevMonth)}`;
   const curEntries  = Object.entries(state.log || {}).filter(([k]) => k.startsWith(curPrefix));
   const prevEntries = Object.entries(state.log || {}).filter(([k]) => k.startsWith(prevPrefix));
   if (!curEntries.length || !prevEntries.length) return null;
   const curAvg  = mean(curEntries.map(([,v]) => v));
   const prevAvg = mean(prevEntries.map(([,v]) => v));
-  const delta   = parseFloat(((curAvg - prevAvg) / (prevAvg || 1) * 100).toFixed(1));
-  return { curAvg: parseFloat(curAvg.toFixed(3)), prevAvg: parseFloat(prevAvg.toFixed(3)), delta };
+  const delta   = round((curAvg - prevAvg) / (prevAvg || 1) * 100, 1);
+  return { curAvg: round(curAvg), prevAvg: round(prevAvg), delta };
 }
 
 // ─────────────────────────────────────────
@@ -2991,6 +3033,11 @@ Chart.defaults.plugins.tooltip.callbacks = {
   title: ctx => ctx[0]?.label || '',
   label: ctx => { const v = ctx.parsed.y ?? ctx.parsed; return ` ${ctx.dataset.label || ''}: ${typeof v === 'number' ? v.toLocaleString('ar-SA') : v}`; },
 };
+
+// خيارات legend موحدة أسفل الرسم البياني
+function legendBottom(padding = 12) {
+  return { display: true, position: 'bottom', labels: { color: '#6b7299', font: { size: 11 }, padding } };
+}
 
 function dc(id) { if (CHARTS[id]) { CHARTS[id].destroy(); delete CHARTS[id]; } }
 function gc(id) { dc(id); const el = document.getElementById(id); return el ? el.getContext('2d') : null; }
@@ -3071,14 +3118,14 @@ function renderDashboard() {
   // إصلاح: استبعاد العادات الجديدة (< 7 أيام) من حساب متوسط المعدل
   const reliableHabits = APP.habits.filter(h => {
     const created = h.createdAt || days30[0];
-    const age = Math.round((isoToDate(today()).getTime() - isoToDate(created).getTime()) / 86400000);
+    const age = daysBetween(created, today());
     return age >= 7;
   });
   const rateBase = reliableHabits.length > 0 ? reliableHabits : APP.habits;
-  const rate30 = rateBase.length ? parseFloat((rateBase.reduce((a, h) => a + getRate(h.id, days30), 0) / rateBase.length).toFixed(1)) : 0;
-  const rate7  = rateBase.length ? parseFloat((rateBase.reduce((a, h) => a + getRate(h.id, days7),  0) / rateBase.length).toFixed(1)) : 0;
+  const rate30 = rateBase.length ? round(rateBase.reduce((a, h) => a + getRate(h.id, days30), 0) / rateBase.length, 1) : 0;
+  const rate7  = rateBase.length ? round(rateBase.reduce((a, h) => a + getRate(h.id, days7),  0) / rateBase.length, 1) : 0;
   // معدل مرجح زمنياً: الأيام الأحدث لها وزن أكبر
-  const wRate30 = total ? parseFloat((APP.habits.reduce((a, h) => a + weightedRate(h.id, days30), 0) / total).toFixed(1)) : 0;
+  const wRate30 = total ? round(APP.habits.reduce((a, h) => a + weightedRate(h.id, days30), 0) / total, 1) : 0;
   const maxStr = APP.habits.reduce((m, h) => Math.max(m, getStreak(h.id)), 0);
   const totChk = Object.values(APP.log).reduce((a, d) => a + (d.completed?.length || 0), 0);
   // إصلاح: الأيام المثالية — تشترط إنجاز جميع العادات الحالية على الأقل 
@@ -3119,10 +3166,7 @@ function renderDashboard() {
   }
 
   // إصلاح: حساب يوم السنة بدون Date arithmetic خطرة
-  const tParts = t.split('-').map(Number);
-  const startOfYear = Date.UTC(tParts[0], 0, 1);
-  const todayUTC = Date.UTC(tParts[0], tParts[1] - 1, tParts[2]);
-  const dayOfYear = Math.floor((todayUTC - startOfYear) / 86400000);
+  const dayOfYear = daysBetween(isoDate(isoParts(t)[0], 1, 1), t);
   document.getElementById('motivationQuote').textContent = MOTIVATIONS[dayOfYear % MOTIVATIONS.length];
 
   // Subtitle
@@ -3261,7 +3305,7 @@ function drawTrend() {
         { label: 'تمهيد أسي', data: es,   borderColor: '#22d97a', fill: false, tension: 0.4, pointRadius: 0, borderWidth: 1.5, borderDash: [4,3] },
       ]
     },
-    options: { ...cOpts, plugins: { ...cOpts.plugins, legend: { display: true, position: 'bottom', labels: { color: '#6b7299', font: { size: 11 }, padding: 12 } } } }
+    options: { ...cOpts, plugins: { ...cOpts.plugins, legend: legendBottom() } }
   });
 }
 
@@ -3328,10 +3372,7 @@ function switchCheckinTab(tab, btn) {
 
 function renderYesterdayPanel() {
   const y = addDays(today(), -1);
-  const DAY_NAMES = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
-  const MONTH_NAMES = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
-  const dt = isoToDate(y);
-  document.getElementById('ciYestDateLabel').textContent = `${DAY_NAMES[dt.getUTCDay()]} ${dt.getUTCDate()} ${MONTH_NAMES[dt.getUTCMonth()]}`;
+  document.getElementById('ciYestDateLabel').textContent = formatDayMonth(y);
   const log = APP.log[y] || { completed: [], mood: 0, energy: 0, note: '' };
   // مزاج أمس
   const mood = log.mood || 3;
@@ -3575,7 +3616,7 @@ function drawAnaTrend() {
   CHARTS['c-ana-trend'] = new Chart(ctx, {
     type: 'line',
     data: { labels: wL, datasets: ds },
-    options: { ...cOpts, plugins: { ...cOpts.plugins, legend: { display: true, position: 'bottom', labels: { color: '#6b7299', padding: 12, font: { size: 11 } } } } }
+    options: { ...cOpts, plugins: { ...cOpts.plugins, legend: legendBottom() } }
   });
 }
 
@@ -3596,7 +3637,7 @@ function drawAnaWD() {
   CHARTS['c-ana-wd'] = new Chart(ctx, {
     type: 'bar',
     data: { labels: WEEKDAYS_S, datasets: ds },
-    options: { ...cOpts, plugins: { ...cOpts.plugins, legend: { display: true, position: 'bottom', labels: { color: '#6b7299', padding: 10, font: { size: 11 } } } } }
+    options: { ...cOpts, plugins: { ...cOpts.plugins, legend: legendBottom(10) } }
   });
 }
 
@@ -3665,13 +3706,13 @@ function buildCorrMatrix() {
 // ─────────────────────────────────────────
 // FINANCE PAGE — STATE & HELPERS
 // ─────────────────────────────────────────
-function finKey() { return `masaar_finance_u${CURRENT_USER}`; }
+function finKey() { return userKey('finance'); }
 
 function finLoad() {
-  try { return JSON.parse(localStorage.getItem(finKey())) || {}; } catch { return {}; }
+  return lsGet(finKey(), {}) || {};
 }
 function finSave(data) {
-  localStorage.setItem(finKey(), JSON.stringify(data));
+  lsSet(finKey(), data);
 }
 
 function finGetState() {
@@ -3697,68 +3738,26 @@ function finDailyBudget(state) {
   const t = today();
   // ── وضع منتصف الشهر ──
   if (state.midMonthRemaining > 0 && state.nextSalaryDate && t < state.nextSalaryDate) {
-    const [ty, tm, td] = t.split('-').map(Number);
-    const [ny, nm, nd] = state.nextSalaryDate.split('-').map(Number);
-    const todayUTC = Date.UTC(ty, tm-1, td);
-    const nextUTC  = Date.UTC(ny, nm-1, nd);
-    const daysLeft = Math.max(1, Math.round((nextUTC - todayUTC) / 86400000));
+    const daysLeft = Math.max(1, daysBetween(t, state.nextSalaryDate));
     const spentSoFar = Object.entries(state.log)
       .filter(([k]) => k >= state.midMonthStartDate && k < t)
       .reduce((sum, [,v]) => sum + v, 0);
     const remaining = Math.max(0, state.midMonthRemaining - spentSoFar);
-    return parseFloat((remaining / daysLeft).toFixed(3));
+    return round(remaining / daysLeft);
   }
   // ── وضع عادي: قسّم على عدد الأيام في الفترة المالية (من تاريخ الراتب إلى تاريخ الراتب التالي) ──
   const net = state.salary - state.fixed;
   if (net <= 0) return 0;
-  const [ty, tm, td] = t.split('-').map(Number);
-  const startDay = state.startDay || 1;
-  // تاريخ بداية الفترة الحالية
-  let periodStart, periodEnd;
-  if (td >= startDay) {
-    // الراتب وصل هذا الشهر
-    const maxDayCur = new Date(ty, tm, 0).getDate();
-    const actualStart = Math.min(startDay, maxDayCur);
-    periodStart = `${ty}-${String(tm).padStart(2,'0')}-${String(actualStart).padStart(2,'0')}`;
-    // نهاية الفترة: يوم قبل الراتب الشهر القادم
-    const nextMonth = tm === 12 ? 1 : tm + 1;
-    const nextYear  = tm === 12 ? ty + 1 : ty;
-    const maxDayNext = new Date(nextYear, nextMonth, 0).getDate();
-    const nextStart  = Math.min(startDay, maxDayNext);
-    const nextStartISO = `${nextYear}-${String(nextMonth).padStart(2,'0')}-${String(nextStart).padStart(2,'0')}`;
-    periodEnd = addDays(nextStartISO, -1);
-  } else {
-    // الراتب لم يصل بعد — الفترة بدأت الشهر الماضي
-    const prevMonth = tm === 1 ? 12 : tm - 1;
-    const prevYear  = tm === 1 ? ty - 1 : ty;
-    const maxDayPrev = new Date(prevYear, prevMonth, 0).getDate();
-    const prevStart  = Math.min(startDay, maxDayPrev);
-    periodStart = `${prevYear}-${String(prevMonth).padStart(2,'0')}-${String(prevStart).padStart(2,'0')}`;
-    // نهاية: يوم قبل الراتب هذا الشهر
-    const maxDayCur2 = new Date(ty, tm, 0).getDate();
-    const curStart   = Math.min(startDay, maxDayCur2);
-    const curStartISO = `${ty}-${String(tm).padStart(2,'0')}-${String(curStart).padStart(2,'0')}`;
-    periodEnd = addDays(curStartISO, -1);
-  }
-  // عدد الأيام في الفترة المالية
-  const [ps_y, ps_m, ps_d] = periodStart.split('-').map(Number);
-  const [pe_y, pe_m, pe_d] = periodEnd.split('-').map(Number);
-  const startUTC2 = Date.UTC(ps_y, ps_m-1, ps_d);
-  const endUTC2   = Date.UTC(pe_y, pe_m-1, pe_d);
-  const periodDays = Math.max(1, Math.round((endUTC2 - startUTC2) / 86400000) + 1);
-  return parseFloat((net / periodDays).toFixed(3));
+  const { start, end } = finPeriodRange(state);
+  const periodDays = Math.max(1, daysBetween(start, end) + 1);
+  return round(net / periodDays);
 }
 
 function finTodayKey() { return today(); } // alias — same as today()
 
 function finDaysSinceStart(state) {
   const { start } = finPeriodRange(state);
-  const t = today();
-  const [sy, sm, sd] = start.split('-').map(Number);
-  const [ty, tm, td] = t.split('-').map(Number);
-  const startUTC = Date.UTC(sy, sm-1, sd);
-  const todayUTC = Date.UTC(ty, tm-1, td);
-  return Math.max(0, Math.floor((todayUTC - startUTC) / 86400000));
+  return Math.max(0, daysBetween(start, today()));
 }
 
 // Calculate today's budget spreading large deficits over up to 3 days
@@ -3771,31 +3770,35 @@ function finTodayBudget(state) {
   if (spent !== undefined && spent > base) {
     const overspend = spent - base;
     const adjusted = base - (overspend / 2);
-    return parseFloat(Math.max(0, adjusted).toFixed(3));
+    return round(Math.max(0, adjusted));
   }
-  return parseFloat(base.toFixed(3));
+  return round(base);
+}
+
+// تاريخ يوم الراتب في شهر معيّن مع تقصيره لآخر يوم في الشهر إذا لزم
+function finSalaryDay(y, m, startDay) {
+  return isoDate(y, m, Math.min(startDay, daysInMonth(y, m)));
+}
+
+// تاريخ الراتب القادم بعد iso — التاريخ اليدوي له الأولوية إن كان مستقبلياً
+function finNextSalaryDate(iso, startDay, manualDate = null) {
+  if (manualDate && manualDate > iso) return manualDate;
+  const [y, m, d] = isoParts(iso);
+  const [sy, sm] = d < startDay ? [y, m] : shiftMonth(y, m, 1);
+  return finSalaryDay(sy, sm, startDay);
 }
 
 function finPeriodRange(state) {
   // يُعيد { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } للفترة المالية الحالية
-  const t = today();
-  const [ty, tm, td] = t.split('-').map(Number);
+  const [ty, tm, td] = isoParts(today());
   const startDay = state.startDay || 1;
-  let periodStart, periodEnd;
-  if (td >= startDay) {
-    const maxDayCur = new Date(ty, tm, 0).getDate();
-    periodStart = `${ty}-${String(tm).padStart(2,'0')}-${String(Math.min(startDay,maxDayCur)).padStart(2,'0')}`;
-    const nextMonth = tm===12?1:tm+1, nextYear = tm===12?ty+1:ty;
-    const maxDayNext = new Date(nextYear, nextMonth, 0).getDate();
-    periodEnd = addDays(`${nextYear}-${String(nextMonth).padStart(2,'0')}-${String(Math.min(startDay,maxDayNext)).padStart(2,'0')}`, -1);
-  } else {
-    const prevMonth = tm===1?12:tm-1, prevYear = tm===1?ty-1:ty;
-    const maxDayPrev = new Date(prevYear, prevMonth, 0).getDate();
-    periodStart = `${prevYear}-${String(prevMonth).padStart(2,'0')}-${String(Math.min(startDay,maxDayPrev)).padStart(2,'0')}`;
-    const maxDayCur2 = new Date(ty, tm, 0).getDate();
-    periodEnd = addDays(`${ty}-${String(tm).padStart(2,'0')}-${String(Math.min(startDay,maxDayCur2)).padStart(2,'0')}`, -1);
-  }
-  return { start: periodStart, end: periodEnd };
+  // الشهر الذي بدأت فيه الفترة: هذا الشهر إذا وصل الراتب، وإلا الشهر الماضي
+  const [py, pm] = td >= startDay ? [ty, tm] : shiftMonth(ty, tm, -1);
+  const [ny, nm] = shiftMonth(py, pm, 1);
+  return {
+    start: finSalaryDay(py, pm, startDay),
+    end: addDays(finSalaryDay(ny, nm, startDay), -1),
+  };
 }
 
 function finMonthLog(state) {
@@ -3835,17 +3838,12 @@ function renderFinance() {
   const todayBudget = finTodayBudget(state);
   const todayKey    = today();
   const todaySpent  = state.log[todayKey] !== undefined ? state.log[todayKey] : null;
-  const remaining   = todaySpent !== null
-    ? parseFloat((todayBudget - todaySpent).toFixed(3))
-    : todayBudget;
+  const remaining   = todaySpent !== null ? round(todayBudget - todaySpent) : todayBudget;
   const pct = base > 0 ? Math.min(1, (todaySpent || 0) / base) : 0;
 
   // ── حساب الفترة المالية أولاً (مطلوب في كل ما يليه) ──
   const { start: pStart, end: pEnd } = finPeriodRange(state);
-  const [ps_y, ps_m, ps_d] = pStart.split('-').map(Number);
-  const [pe_y, pe_m, pe_d] = pEnd.split('-').map(Number);
-  const periodTotalDays = Math.max(1,
-    Math.round((Date.UTC(pe_y,pe_m-1,pe_d) - Date.UTC(ps_y,ps_m-1,ps_d)) / 86400000) + 1);
+  const periodTotalDays = Math.max(1, daysBetween(pStart, pEnd) + 1);
   const dayNum = finDaysSinceStart(state) + 1;
 
   // بناء قائمة الأيام السابقة
@@ -3924,36 +3922,20 @@ function renderFinance() {
   } else if (momEl) { momEl.style.display = 'none'; }
 
   // ─ Monthly end warning
-  const todayDayNum  = parseInt(todayKey.slice(8));
-  const [t_y, t_m]   = todayKey.split('-').map(Number);
-  const daysInCalMon = new Date(t_y, t_m, 0).getDate();
-  const daysLeftCur  = daysInCalMon - todayDayNum;
-  if (daysLeftCur <= 3 && remaining < base * 0.3) {
-    const MWKEY = 'masaar_mwarn_' + todayKey + '_u' + CURRENT_USER;
-    if (!localStorage.getItem(MWKEY)) {
-      localStorage.setItem(MWKEY, '1');
-      const cutoff = addDays(todayKey, -7);
-      Object.keys(localStorage).forEach(k => {
-        if (k.startsWith('masaar_mwarn_') && k.endsWith(`_u${CURRENT_USER}`)) {
-          const dp = k.replace('masaar_mwarn_','').replace(`_u${CURRENT_USER}`,'');
-          if (dp < cutoff) localStorage.removeItem(k);
-        }
-      });
-      setTimeout(() => showArchivePrompt_custom('⚠️',
-        'تبقى ' + daysLeftCur + ' أيام على نهاية الشهر',
-        'ميزانيتك اليومية ' + remaining.toFixed(3) + ' ر.ع — تمهّل في الإنفاق',
-        '#ff4f6d'), 1000);
-    }
+  const [t_y, t_m, t_d] = isoParts(todayKey);
+  const daysLeftCur  = daysInMonth(t_y, t_m) - t_d;
+  if (daysLeftCur <= 3 && remaining < base * 0.3 && claimDailyFlag('mwarn', todayKey, 7)) {
+    setTimeout(() => showArchivePrompt_custom('⚠️',
+      'تبقى ' + daysLeftCur + ' أيام على نهاية الشهر',
+      'ميزانيتك اليومية ' + remaining.toFixed(3) + ' ر.ع — تمهّل في الإنفاق',
+      '#ff4f6d'), 1000);
   }
 
   // ─ Mid-month banner
   const midMonthEl = document.getElementById('finMidMonthBanner');
   if (midMonthEl) {
     if (state.midMonthRemaining > 0 && state.nextSalaryDate && todayKey < state.nextSalaryDate) {
-      const [ny,nm,nd] = state.nextSalaryDate.split('-').map(Number);
-      const [ty3,tm3,td3] = todayKey.split('-').map(Number);
-      const dLeft = Math.max(0, Math.round(
-        (Date.UTC(ny,nm-1,nd) - Date.UTC(ty3,tm3-1,td3)) / 86400000));
+      const dLeft = Math.max(0, daysBetween(todayKey, state.nextSalaryDate));
       midMonthEl.style.display = 'flex';
       midMonthEl.innerHTML = `<i class="ti ti-calendar-event" style="color:var(--cy)"></i>`
         + `<span style="font-size:12px;color:var(--tx2)">وضع منتصف الشهر — `
@@ -4123,24 +4105,24 @@ function finConfirmEmergency() {
   if (!isNaN(val)) finConfirmSave(val);
 }
 
+// تسجيل مصروف يوم مع تصحيح خزان التوفير (عكس القيمة القديمة أولاً)
+function finRecordSpend(state, date, val, base) {
+  const prevVal = state.log[date];
+  if (prevVal !== undefined && prevVal < base) {
+    state.weekend = round(Math.max(0, state.weekend - (base - prevVal)));
+  }
+  state.log[date] = val;
+  if (val < base) {
+    state.weekend = round(state.weekend + (base - val));
+  }
+  finSave(state);
+}
+
 function finConfirmSave(val) {
   const state = finGetState();
   const base = finDailyBudget(state);
   const todayKey = finTodayKey(); // إصلاح: تجنب تعارض اسم المتغير مع دالة today()
-
-  // If today was already saved, reverse the previous tank effect first
-  const prevVal = state.log[todayKey];
-  if (prevVal !== undefined && prevVal < base) {
-    state.weekend = parseFloat(Math.max(0, state.weekend - (base - prevVal)).toFixed(3));
-  }
-
-  state.log[todayKey] = val;
-
-  if (val < base) {
-    state.weekend = parseFloat((state.weekend + (base - val)).toFixed(3));
-  }
-
-  finSave(state);
+  finRecordSpend(state, todayKey, val, base);
   document.getElementById('finSpentInput').value = '';
   document.getElementById('finSimulator').style.display = 'none';
   toast(`✓ تم حفظ ${val.toFixed(3)} ر.ع لليوم`);
@@ -4156,8 +4138,6 @@ function finBuildPastDaySelect() {
   const t = today();
   const sel = document.getElementById('finEditDaySelect');
   if (!sel) return;
-  const DAY_NAMES = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
-  const MONTH_NAMES = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
   // الاحتفاظ بالقيمة المختارة حالياً لتجنب إعادة الضبط عند كل render
   const prevVal = sel.value;
   // آخر 14 يوم ماضٍ
@@ -4165,11 +4145,7 @@ function finBuildPastDaySelect() {
   for (let i = 1; i <= 14; i++) days.push(addDays(t, -i));
   sel.innerHTML = days.map(d => {
     const spent = state.log[d];
-    const dt = isoToDate(d);
-    const dayName = DAY_NAMES[dt.getUTCDay()];
-    const dayNum  = dt.getUTCDate();
-    const monName = MONTH_NAMES[dt.getUTCMonth()];
-    const label = `${dayName} ${dayNum} ${monName}`;
+    const label = formatDayMonth(d);
     const spentLabel = spent !== undefined ? ` — ${spent.toFixed(3)} ر.ع` : ' — لم يُسجَّل';
     return `<option value="${d}">${label}${spentLabel}</option>`;
   }).join('');
@@ -4200,34 +4176,16 @@ function finSavePastDay() {
   const val = parseFloat(inp.value);
   if (!date) { return; }
   if (isNaN(val) || val < 0) {
-    if (msgEl) { msgEl.style.display = 'block'; msgEl.style.color = 'var(--re)'; msgEl.textContent = '⚠️ أدخل مبلغاً صحيحاً'; setTimeout(() => { msgEl.style.display = 'none'; }, 3000); }
+    flashMsg(msgEl, '⚠️ أدخل مبلغاً صحيحاً', false);
     return;
   }
-  const base = finDailyBudget(state);
-  // تعديل تأثير خزان التوفير
-  const prevVal = state.log[date];
-  if (prevVal !== undefined && prevVal < base) {
-    state.weekend = parseFloat(Math.max(0, state.weekend - (base - prevVal)).toFixed(3));
-  }
-  state.log[date] = val;
-  if (val < base) {
-    state.weekend = parseFloat((state.weekend + (base - val)).toFixed(3));
-  }
-  finSave(state);
+  finRecordSpend(state, date, val, finDailyBudget(state));
   // تحديث نص الـ option بالقيمة الجديدة
   const opt = sel.querySelector(`option[value="${date}"]`);
   if (opt) {
-    const DAY_NAMES2 = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
-    const MONTH_NAMES2 = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
-    const dt2 = isoToDate(date);
-    opt.textContent = `${DAY_NAMES2[dt2.getUTCDay()]} ${dt2.getUTCDate()} ${MONTH_NAMES2[dt2.getUTCMonth()]} — ${val.toFixed(3)} ر.ع`;
+    opt.textContent = `${formatDayMonth(date)} — ${val.toFixed(3)} ر.ع`;
   }
-  if (msgEl) {
-    msgEl.style.display = 'block';
-    msgEl.style.color = 'var(--gr)';
-    msgEl.textContent = `✓ تم تسجيل ${val.toFixed(3)} ر.ع ليوم ${date}`;
-    setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
-  }
+  flashMsg(msgEl, `✓ تم تسجيل ${val.toFixed(3)} ر.ع ليوم ${date}`, true);
   inp.value = '';
   toast(`✓ تم تعديل مصاريف ${date}`);
   renderFinance();
@@ -4278,8 +4236,6 @@ function openFinanceSetup() {
 
 function finUpdateDaysRemaining() {
   const t = today();
-  const [ty, tm, td] = t.split('-').map(Number);
-  const todayUTC = Date.UTC(ty, tm-1, td);
   const el = document.getElementById('finDaysRemaining');
 
   // إذا أدخل المستخدم قيمة يدوية، استخدمها مباشرةً
@@ -4289,26 +4245,10 @@ function finUpdateDaysRemaining() {
   // أولوية: تاريخ الراتب اليدوي إذا أدخله المستخدم
   const manualEl = document.getElementById('finNextSalaryManual');
   const manualDate = manualEl && manualEl.value ? manualEl.value : null;
+  const startDay = parseInt(document.getElementById('finStartDay').value) || 1;
 
-  let nextSalaryDate;
-  if (manualDate && manualDate > t) {
-    nextSalaryDate = manualDate;
-  } else {
-    // الحساب التلقائي من يوم الشهر
-    const startDay = parseInt(document.getElementById('finStartDay').value) || 1;
-    if (td < startDay) {
-      const maxDay = new Date(ty, tm, 0).getDate();
-      nextSalaryDate = `${ty}-${String(tm).padStart(2,'0')}-${String(Math.min(startDay, maxDay)).padStart(2,'0')}`;
-    } else {
-      const nextMonth = tm === 12 ? 1 : tm + 1;
-      const nextYear = tm === 12 ? ty + 1 : ty;
-      const maxDay = new Date(nextYear, nextMonth, 0).getDate();
-      nextSalaryDate = `${nextYear}-${String(nextMonth).padStart(2,'0')}-${String(Math.min(startDay, maxDay)).padStart(2,'0')}`;
-    }
-  }
-  const [ny, nm, nd] = nextSalaryDate.split('-').map(Number);
-  const nextUTC = Date.UTC(ny, nm-1, nd);
-  const daysLeft = Math.max(1, Math.round((nextUTC - todayUTC) / 86400000));
+  const nextSalaryDate = finNextSalaryDate(t, startDay, manualDate);
+  const daysLeft = Math.max(1, daysBetween(t, nextSalaryDate));
   if (el && !el.value) {
     el.placeholder = `${daysLeft} يوم (تلقائي حتى ${nextSalaryDate})`;
   }
@@ -4320,9 +4260,8 @@ function finUpdateSetupPreview() {
   const fix = parseFloat(document.getElementById('finFixed').value) || 0;
   const rem = parseFloat(document.getElementById('finRemainingBudget')?.value) || 0;
   const net = sal - fix;
-  const t = today();
-  const [y, m] = t.split('-').map(Number);
-  const days = new Date(y, m, 0).getDate();
+  const [y, m] = isoParts(today());
+  const days = daysInMonth(y, m);
   const daily = net > 0 ? (net / days).toFixed(3) : '—';
   const saved = sal > 0 ? ((net / sal) * 100).toFixed(0) : 0;
 
@@ -4372,16 +4311,11 @@ function partialWithdrawTank() {
   const inp = document.getElementById('tankWithdrawInput');
   const msgEl = document.getElementById('tankWithdrawMsg');
   const val = parseFloat(inp.value);
-  const showMsg = (txt, ok) => {
-    msgEl.style.display = 'block';
-    msgEl.style.color = ok ? 'var(--gr)' : 'var(--re)';
-    msgEl.textContent = txt;
-    setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
-  };
+  const showMsg = (txt, ok) => flashMsg(msgEl, txt, ok);
   if (isNaN(val) || val <= 0) { showMsg('⚠️ أدخل مبلغاً صحيحاً أكبر من صفر', false); return; }
   const state = finGetState();
   if (val > state.weekend) { showMsg(`⚠️ المبلغ أكبر من الخزان (${state.weekend.toFixed(3)} ر.ع)`, false); return; }
-  state.weekend = parseFloat(Math.max(0, state.weekend - val).toFixed(3));
+  state.weekend = round(Math.max(0, state.weekend - val));
   finSave(state);
   inp.value = '';
   showMsg(`✓ تم خصم ${val.toFixed(3)} ر.ع — المتبقي: ${state.weekend.toFixed(3)} ر.ع`, true);
@@ -4414,8 +4348,6 @@ function finSaveSetup() {
   // إذا أدخل المستخدم مبلغاً متبقياً — وضع منتصف الشهر
   if (remainingBudget > 0) {
     const t = today();
-    const [ty, tm, td] = t.split('-').map(Number);
-    const todayUTC = Date.UTC(ty, tm-1, td);
     // أولوية: الأيام اليدوية من الحقل
     const manualDaysEl = document.getElementById('finDaysRemaining');
     const manualDaysVal = manualDaysEl && manualDaysEl.value ? parseInt(manualDaysEl.value) : 0;
@@ -4423,31 +4355,13 @@ function finSaveSetup() {
     if (manualDaysVal > 0) {
       // استخدام الأيام اليدوية مباشرةً
       daysLeft = manualDaysVal;
-      const nextUTC2 = todayUTC + daysLeft * 86400000;
-      const nd2 = new Date(nextUTC2);
-      nextSalaryDate = `${nd2.getUTCFullYear()}-${String(nd2.getUTCMonth()+1).padStart(2,'0')}-${String(nd2.getUTCDate()).padStart(2,'0')}`;
-    } else if (manualDate && manualDate > t) {
-      nextSalaryDate = manualDate;
-      const [ny, nm, nd] = nextSalaryDate.split('-').map(Number);
-      const nextUTC = Date.UTC(ny, nm-1, nd);
-      daysLeft = Math.max(1, Math.round((nextUTC - todayUTC) / 86400000));
-    } else if (td < startDay) {
-      const maxDay = new Date(ty, tm, 0).getDate();
-      nextSalaryDate = `${ty}-${String(tm).padStart(2,'0')}-${String(Math.min(startDay, maxDay)).padStart(2,'0')}`;
-      const [ny, nm, nd] = nextSalaryDate.split('-').map(Number);
-      const nextUTC = Date.UTC(ny, nm-1, nd);
-      daysLeft = Math.max(1, Math.round((nextUTC - todayUTC) / 86400000));
+      nextSalaryDate = addDays(t, daysLeft);
     } else {
-      const nextMonth = tm === 12 ? 1 : tm + 1;
-      const nextYear = tm === 12 ? ty + 1 : ty;
-      const maxDay = new Date(nextYear, nextMonth, 0).getDate();
-      nextSalaryDate = `${nextYear}-${String(nextMonth).padStart(2,'0')}-${String(Math.min(startDay, maxDay)).padStart(2,'0')}`;
-      const [ny, nm, nd] = nextSalaryDate.split('-').map(Number);
-      const nextUTC = Date.UTC(ny, nm-1, nd);
-      daysLeft = Math.max(1, Math.round((nextUTC - todayUTC) / 86400000));
+      nextSalaryDate = finNextSalaryDate(t, startDay, manualDate);
+      daysLeft = Math.max(1, daysBetween(t, nextSalaryDate));
     }
     // تخزين الميزانية المؤقتة
-    state.midMonthRemaining = parseFloat(remainingBudget.toFixed(3));
+    state.midMonthRemaining = round(remainingBudget);
     state.midMonthDays = daysLeft;
     state.midMonthStartDate = t;
     state.nextSalaryDate = nextSalaryDate;
@@ -4608,16 +4522,14 @@ function drawMonthlyChart(filterHid) {
   const ctx = gc('c-monthly'); if (!ctx) return;
   const months = [], labels = [];
   const t = today();
-  const [ty, tm] = t.split('-').map(Number);
+  const [ty, tm] = isoParts(t);
   for (let i = 11; i >= 0; i--) {
     // إصلاح: حساب الشهر بدون setMonth() لتجنب DST
-    let y = ty, m = tm - 1 - i;
-    while (m < 0) { m += 12; y--; }
-    while (m > 11) { m -= 12; y++; }
-    const lastDay = new Date(y, m + 1, 0).getDate();
+    const [y, m1] = shiftMonth(ty, tm, -i);
+    const m = m1 - 1;
     const days = [];
-    for (let d = 1; d <= lastDay; d++) {
-      const iso = `${y}-${String(m + 1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    for (let d = 1; d <= daysInMonth(y, m1); d++) {
+      const iso = isoDate(y, m1, d);
       if (iso <= t) days.push(iso);
     }
     const pct = filterHid === 'all' ?
@@ -4644,12 +4556,12 @@ function buildCalendarGrid() {
   const headers = document.getElementById('calDayHeaders');
   headers.innerHTML = WEEKDAYS_CAL.map(d => `<div class="cal-dh">${d}</div>`).join('');
   const firstDay = new Date(y, m, 1).getDay();
-  const lastDate = new Date(y, m + 1, 0).getDate();
+  const lastDate = daysInMonth(y, m + 1);
   const today_str = today();
   let cells = '';
   for (let i = 0; i < firstDay; i++) cells += `<div class="cal-day empty"></div>`;
   for (let d = 1; d <= lastDate; d++) {
-    const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const iso = isoDate(y, m + 1, d);
     const isToday = iso === today_str;
     const isFuture = iso > today_str;
     const total = APP.habits.length;
@@ -4887,12 +4799,10 @@ function changePassword() {
   USERS[CURRENT_USER].password = newVal;
 
   // حفظ كلمة السر الجديدة في localStorage — إصلاح: استخدام String(CURRENT_USER) لضمان تطابق المفتاح
-  try {
-    const pwStore = JSON.parse(localStorage.getItem('masaar_pw_store') || '{}');
-    pwStore[String(CURRENT_USER)] = newVal;
-    pwStore[CURRENT_USER] = newVal; // حفظ بالنوعين لضمان التوافق
-    localStorage.setItem('masaar_pw_store', JSON.stringify(pwStore));
-  } catch(e) { showMsg('تم التحديث في الجلسة الحالية فقط — تعذّر الحفظ الدائم', false); return; }
+  const pwStore = lsGet(PW_STORE_KEY, {}) || {};
+  pwStore[String(CURRENT_USER)] = newVal;
+  pwStore[CURRENT_USER] = newVal; // حفظ بالنوعين لضمان التوافق
+  if (!lsSet(PW_STORE_KEY, pwStore)) { showMsg('تم التحديث في الجلسة الحالية فقط — تعذّر الحفظ الدائم', false); return; }
 
   document.getElementById('cpOld').value = '';
   document.getElementById('cpNew').value = '';
@@ -4909,11 +4819,8 @@ function renderLoginHistory() {
   // Merge history from both users
   const allHistory = [];
   [1, 2].forEach(uid => {
-    const key = USERS[uid].secKey;
-    try {
-      const s = JSON.parse(localStorage.getItem(key) || '{}');
-      (s.loginHistory || []).forEach(entry => allHistory.push({ ...entry, uid }));
-    } catch {}
+    const s = lsGet(USERS[uid].secKey, {}) || {};
+    (s.loginHistory || []).forEach(entry => allHistory.push({ ...entry, uid }));
   });
   allHistory.sort((a, b) => b.ts - a.ts);
 
@@ -4952,12 +4859,9 @@ function renderLoginHistory() {
 function clearLoginHistory() {
   if (!confirm('مسح سجل تسجيلات الدخول لجميع المستخدمين؟ لا يمكن التراجع.')) return;
   [1, 2].forEach(uid => {
-    const key = USERS[uid].secKey;
-    try {
-      const s = JSON.parse(localStorage.getItem(key) || '{}');
-      s.loginHistory = [];
-      localStorage.setItem(key, JSON.stringify(s));
-    } catch {}
+    const s = lsGet(USERS[uid].secKey, {}) || {};
+    s.loginHistory = [];
+    lsSet(USERS[uid].secKey, s);
   });
   renderLoginHistory();
   toast('تم مسح السجل');
@@ -5311,12 +5215,7 @@ function exportJournalPage() {
 </body>
 </html>`;
 
-  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `masaar-journal-${userName}-${today()}.html`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadFile(html, `masaar-journal-${userName}-${today()}.html`, 'text/html;charset=utf-8');
   toast(`✓ تم تصدير ${entries.length} يومية كصفحة HTML`);
 }
 
@@ -5747,19 +5646,10 @@ function checkStreakWarnings() {
   const hour = new Date().getHours();
   if (hour < 21) return;
   const t = today();
-  const WARN_KEY = `masaar_streak_warn_${t}_u${CURRENT_USER}`;
-  if (localStorage.getItem(WARN_KEY)) return; // تحقق مبكر قبل أي عمل ثقيل
+  if (hasDailyFlag('streak_warn', t)) return; // تحقق مبكر قبل أي عمل ثقيل
   const atRisk = APP.habits.filter(h => getStreak(h.id) >= 3 && !isCompleted(h.id, t));
   if (!atRisk.length) return;
-  localStorage.setItem(WARN_KEY, '1');
-  // تنظيف مفاتيح قديمة — مرة واحدة فقط عند الحاجة
-  const cutoff = addDays(t, -2);
-  Object.keys(localStorage).forEach(k => {
-    if (k.startsWith('masaar_streak_warn_') && k.endsWith(`_u${CURRENT_USER}`)) {
-      const dp = k.replace('masaar_streak_warn_','').replace(`_u${CURRENT_USER}`,'');
-      if (dp < cutoff) localStorage.removeItem(k);
-    }
-  });
+  claimDailyFlag('streak_warn', t, 2);
   const names = atRisk.slice(0, 2).map(h => esc(h.name)).join('، ') + (atRisk.length > 2 ? ` و${atRisk.length - 2} أخرى` : '');
   showArchivePrompt_custom('🔥', `${atRisk.length} سلاسل على وشك الانكسار`, `${names} — أنجزها الآن قبل منتصف الليل`, '#ff4f6d');
 }
@@ -5795,7 +5685,6 @@ function getUserLevel() {
 
 // تحليل أفضل/أسوأ يوم في الأسبوع لعادة معينة
 function bestWorstDay(hid, days) {
-  const DAYS_AR = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
   const past = days.filter(d => d <= today());
   const stats = Array(7).fill(null).map(() => ({ done: 0, total: 0 }));
   past.forEach(d => {
@@ -5803,7 +5692,7 @@ function bestWorstDay(hid, days) {
     stats[w].total++;
     if (isCompleted(hid, d)) stats[w].done++;
   });
-  const rates = stats.map((s, i) => s.total >= 3 ? { day: DAYS_AR[i], rate: s.done / s.total } : null);
+  const rates = stats.map((s, i) => s.total >= 3 ? { day: WEEKDAYS_F[i], rate: s.done / s.total } : null);
   const valid = rates.filter(Boolean);
   if (valid.length < 3) return null;
   const best  = valid.reduce((a, b) => b.rate > a.rate ? b : a);
@@ -5820,16 +5709,7 @@ function checkWeeklySummary() {
   // إصلاح: عرض الملخص يوم الجمعة أو السبت (fallback لمن لم يفتح التطبيق الجمعة)
   if (dow !== 5 && dow !== 6) return;
   const t = today();
-  const KEY = `masaar_wsummary_${t}_u${CURRENT_USER}`;
-  if (localStorage.getItem(KEY)) return;
-  localStorage.setItem(KEY, '1');
-  const cutoff = addDays(t, -14);
-  Object.keys(localStorage).forEach(k => {
-    if (k.startsWith('masaar_wsummary_') && k.endsWith(`_u${CURRENT_USER}`)) {
-      const datepart = k.replace('masaar_wsummary_','').replace(`_u${CURRENT_USER}`,'');
-      if (datepart < cutoff) localStorage.removeItem(k);
-    }
-  });
+  if (!claimDailyFlag('wsummary', t, 14)) return;
   const days7 = getLast(7);
   const total = APP.habits.length;
   if (!total) return;
@@ -5842,7 +5722,7 @@ function checkWeeklySummary() {
 }
 
 function checkAutoArchive() {
-  const CHECK_KEY = `masaar_archive_check_u${CURRENT_USER}`;
+  const CHECK_KEY = userKey('archive_check');
   const THRESHOLD = 90; // days considered "old"
 
   // Only check once per day; guard against clock rollback
@@ -5913,12 +5793,10 @@ function dismissArchiveBanner() {
 }
 
 function loadSavedPasswords() {
-  try {
-    const pw = JSON.parse(localStorage.getItem('masaar_pw_store') || '{}');
-    // إصلاح: التحقق بكلا النوعين (رقم وstring) لأن JSON يحوّل المفاتيح لـ string
-    if (pw[1] || pw['1']) USERS[1].password = pw[1] || pw['1'];
-    if (pw[2] || pw['2']) USERS[2].password = pw[2] || pw['2'];
-  } catch {}
+  const pw = lsGet(PW_STORE_KEY, {}) || {};
+  // إصلاح: التحقق بكلا النوعين (رقم وstring) لأن JSON يحوّل المفاتيح لـ string
+  if (pw[1] || pw['1']) USERS[1].password = pw[1] || pw['1'];
+  if (pw[2] || pw['2']) USERS[2].password = pw[2] || pw['2'];
 }
 initBgCanvas();
 loadSavedPasswords();
