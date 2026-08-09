@@ -1886,11 +1886,46 @@ input[type=range]::-webkit-slider-thumb{
 // ─────────────────────────────────────────
 // SECURITY SYSTEM — MULTI-USER
 // ─────────────────────────────────────────
+const PW_ITERATIONS = 310000;
+
 const USERS = {
-  1: { name: 'محمود', nameEn: 'Mahmood', avatar: 'م', password: 'Oman@123', color: 'linear-gradient(135deg,#6e64ff,#28d4f5)', storageKey: 'masaar_pro_v3', secKey: 'masaar_security_u1' },
-  2: { name: 'عمر',   nameEn: 'Omar',    avatar: 'ع', password: 'amr14444', color: 'linear-gradient(135deg,#ff7b3d,#f45cd4)', storageKey: 'masaar_pro_v3_u2', secKey: 'masaar_security_u2' },
+  1: { name: 'محمود', nameEn: 'Mahmood', avatar: 'م', pwHash: { salt: 'Uu1Kh19Ks1DNuNUxjn812A==', iter: PW_ITERATIONS, hash: 'dKyBlssNsDalrYvy/UvNfNobcNUxg8TrDIc9/sk2rVQ=' }, color: 'linear-gradient(135deg,#6e64ff,#28d4f5)', storageKey: 'masaar_pro_v3', secKey: 'masaar_security_u1' },
+  2: { name: 'عمر',   nameEn: 'Omar',    avatar: 'ع', pwHash: { salt: 'kYiGB55NQ78WTm7eF3w2Wg==', iter: PW_ITERATIONS, hash: 'enPucmGdMnKYTRXQd6Bvz6WfI1prBTqYYvSdxzHHSmg=' }, color: 'linear-gradient(135deg,#ff7b3d,#f45cd4)', storageKey: 'masaar_pro_v3_u2', secKey: 'masaar_security_u2' },
 };
 let CURRENT_USER = 1;
+
+function _b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function _bytesToB64(bytes) {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+async function derivePwHash(password, saltBytes, iter) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: saltBytes, iterations: iter, hash: 'SHA-256' }, base, 256);
+  return _bytesToB64(new Uint8Array(bits));
+}
+
+async function makePwRecord(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  return { salt: _bytesToB64(salt), iter: PW_ITERATIONS, hash: await derivePwHash(password, salt, PW_ITERATIONS) };
+}
+
+async function verifyPassword(uid, password) {
+  const rec = USERS[uid] && USERS[uid].pwHash;
+  if (!rec) return false;
+  const candidate = await derivePwHash(password, _b64ToBytes(rec.salt), rec.iter);
+  if (candidate.length !== rec.hash.length) return false;
+  let diff = 0;
+  for (let i = 0; i < candidate.length; i++) diff |= candidate.charCodeAt(i) ^ rec.hash.charCodeAt(i);
+  return diff === 0;
+}
 
 const SECURITY = {
   MAX_ATTEMPTS: 5,
@@ -1912,9 +1947,9 @@ const SECURITY = {
   },
   getRemainingLockTime() { const s = this.getState(); return s.lockedUntil ? Math.max(0, s.lockedUntil - Date.now()) : 0; },
 
-  attempt(pw) {
+  async attempt(pw) {
     const s = this.getState();
-    if (pw === USERS[CURRENT_USER].password) {
+    if (await verifyPassword(CURRENT_USER, pw)) {
       s.attempts = 0; s.lockedUntil = null; s.unlocked = true;
       // Log this login
       if (!s.loginHistory) s.loginHistory = [];
@@ -2063,7 +2098,7 @@ function togglePwVisibility() {
   }
 }
 
-function attemptLogin() {
+async function attemptLogin() {
   const pw = document.getElementById('pwInput').value;
   const inp = document.getElementById('pwInput');
   const errMsg = document.getElementById('errMsg');
@@ -2074,7 +2109,7 @@ function attemptLogin() {
     return;
   }
 
-  const result = SECURITY.attempt(pw);
+  const result = await SECURITY.attempt(pw);
 
   if (result.success) {
     errMsg.classList.remove('show');
@@ -4859,7 +4894,7 @@ function saveJournalEdit(date) {
 // ─────────────────────────────────────────
 // CHANGE PASSWORD
 // ─────────────────────────────────────────
-function changePassword() {
+async function changePassword() {
   const oldVal = document.getElementById('cpOld').value;
   const newVal = document.getElementById('cpNew').value;
   const conf   = document.getElementById('cpConfirm').value;
@@ -4875,23 +4910,20 @@ function changePassword() {
 
   if (!oldVal || !newVal || !conf) { showMsg('يرجى ملء جميع الحقول', false); return; }
 
-  // إصلاح: مقارنة كلمة السر الحالية مع ما هو محفوظ فعلاً (قد يختلف النوع)
-  const currentPw = USERS[CURRENT_USER].password;
-  if (oldVal !== currentPw) { showMsg('كلمة السر الحالية غير صحيحة', false); return; }
+  if (!(await verifyPassword(CURRENT_USER, oldVal))) { showMsg('كلمة السر الحالية غير صحيحة', false); return; }
 
   if (newVal.length < 1) { showMsg('كلمة السر لا يمكن أن تكون فارغة', false); return; }
   if (newVal !== conf) { showMsg('كلمتا السر غير متطابقتان', false); return; }
   if (newVal === oldVal) { showMsg('كلمة السر الجديدة مطابقة للقديمة — اختر كلمة مختلفة', false); return; }
 
-  // تحديث كلمة السر في الذاكرة
-  USERS[CURRENT_USER].password = newVal;
+  // تُخزَّن بصمة كلمة السر فقط (PBKDF2) — لا تُحفظ كلمة السر نفسها أبداً
+  const record = await makePwRecord(newVal);
+  USERS[CURRENT_USER].pwHash = record;
 
-  // حفظ كلمة السر الجديدة في localStorage — إصلاح: استخدام String(CURRENT_USER) لضمان تطابق المفتاح
   try {
-    const pwStore = JSON.parse(localStorage.getItem('masaar_pw_store') || '{}');
-    pwStore[String(CURRENT_USER)] = newVal;
-    pwStore[CURRENT_USER] = newVal; // حفظ بالنوعين لضمان التوافق
-    localStorage.setItem('masaar_pw_store', JSON.stringify(pwStore));
+    const pwStore = JSON.parse(localStorage.getItem('masaar_pw_store_v2') || '{}');
+    pwStore[String(CURRENT_USER)] = record;
+    localStorage.setItem('masaar_pw_store_v2', JSON.stringify(pwStore));
   } catch(e) { showMsg('تم التحديث في الجلسة الحالية فقط — تعذّر الحفظ الدائم', false); return; }
 
   document.getElementById('cpOld').value = '';
@@ -5914,10 +5946,13 @@ function dismissArchiveBanner() {
 
 function loadSavedPasswords() {
   try {
-    const pw = JSON.parse(localStorage.getItem('masaar_pw_store') || '{}');
-    // إصلاح: التحقق بكلا النوعين (رقم وstring) لأن JSON يحوّل المفاتيح لـ string
-    if (pw[1] || pw['1']) USERS[1].password = pw[1] || pw['1'];
-    if (pw[2] || pw['2']) USERS[2].password = pw[2] || pw['2'];
+    // إزالة أي كلمات سر قديمة كانت تُحفظ بنص واضح
+    localStorage.removeItem('masaar_pw_store');
+    const pw = JSON.parse(localStorage.getItem('masaar_pw_store_v2') || '{}');
+    for (const uid of [1, 2]) {
+      const rec = pw[String(uid)];
+      if (rec && rec.salt && rec.hash && rec.iter) USERS[uid].pwHash = rec;
+    }
   } catch {}
 }
 initBgCanvas();
