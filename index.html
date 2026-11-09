@@ -11,6 +11,9 @@
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@200;300;400;500;700;800;900&family=Cairo:wght@300;400;600;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
 /* ═══════════════════════════════════════════════════════════
    MASAAR PRO — DESIGN SYSTEM
@@ -977,6 +980,13 @@ input[type=range]::-webkit-slider-thumb{
   transition:var(--tr);font-family:var(--font);
 }
 .sb-logout-btn:hover{background:rgba(255,79,109,0.12);border-color:rgba(255,79,109,0.3);color:var(--re)}
+/* ── Firebase cloud sync ── */
+.sb-sync{display:flex;align-items:center;gap:7px;margin:10px 0 2px;padding:7px 10px;border:1px solid var(--bd);border-radius:10px;font-size:11.5px;color:var(--tx2);background:rgba(255,255,255,0.02)}
+.sync-dot{width:9px;height:9px;border-radius:50%;background:#6b7299;flex-shrink:0}
+.sync-dot.on{background:#22d97a;box-shadow:0 0 8px rgba(34,217,122,0.7)}
+.sync-dot.busy{background:#ffb830;box-shadow:0 0 8px rgba(255,184,48,0.7);animation:syncPulse 1.2s infinite}
+.sync-dot.off{background:#ff4f6d}
+@keyframes syncPulse{50%{opacity:0.45}}
 </style>
 </head>
 <body>
@@ -1134,6 +1144,10 @@ input[type=range]::-webkit-slider-thumb{
       <div><div class="sb-user-name" id="sbUserName">محمود</div><div class="sb-user-role">مستخدم نشط</div><div id="userLevelBadge" style="font-size:10.5px;margin-top:2px;font-weight:700"></div></div>
     </div>
 
+    <div class="sb-sync" id="sbSync" title="حالة المزامنة السحابية">
+      <span class="sync-dot" id="syncDot"></span>
+      <span id="syncText">غير مسجَّل الدخول</span>
+    </div>
     <button class="sb-lock-btn" onclick="lockApp()">
       <i class="ti ti-lock"></i>
       قفل التطبيق
@@ -1649,6 +1663,22 @@ input[type=range]::-webkit-slider-thumb{
         <div class="ct"><i class="ti ti-target ct-icon"></i>أهداف العادات الأسبوعية</div>
         <div id="habitGoalsList"></div>
         <div id="habitGoalsEmpty" style="display:none" class="empty-state"><i class="ti ti-target es-icon"></i><div class="es-sub">لا توجد عادات</div></div>
+      </div>
+      <div class="card mb">
+        <div class="ct"><i class="ti ti-cloud ct-icon"></i>المزامنة السحابية</div>
+        <div class="set-row">
+          <div class="set-info"><div class="st" id="syncStateText">غير مسجَّل الدخول</div><div class="sb" id="syncEmailText">سجّل دخولك بحساب جوجل لمزامنة بياناتك تلقائياً بين الهاتف واللابتوب</div></div>
+          <span class="badge b-a" id="syncBadge">غير مفعّلة</span>
+        </div>
+        <div class="set-row">
+          <div class="set-info"><div class="st">آخر مزامنة</div><div class="sb" id="syncLastText">—</div></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" id="syncSignInBtn" onclick="cloudSignIn()"><i class="ti ti-brand-google"></i>تسجيل الدخول بجوجل</button>
+          <button class="btn btn-sm" id="syncNowBtn" onclick="cloudSyncNow()" style="display:none"><i class="ti ti-refresh"></i>مزامنة الآن</button>
+          <button class="btn btn-sm btn-ghost" id="syncSignOutBtn" onclick="cloudSignOut()" style="display:none"><i class="ti ti-logout"></i>تسجيل الخروج من جوجل</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--mu2);margin-top:10px;line-height:1.7">بياناتك تُحفظ أولاً على جهازك، ثم تُزامَن إلى حساب جوجل الخاص بك فقط. عند انقطاع الإنترنت يستمر التطبيق بالعمل محلياً وتُستأنف المزامنة تلقائياً.</div>
       </div>
       <div class="card">
         <div class="ct"><i class="ti ti-database ct-icon"></i>إدارة البيانات</div>
@@ -2272,6 +2302,210 @@ function clearChartCache() { _chartDataHash.clear(); }
 // ─────────────────────────────────────────
 // PERSISTENCE
 // ─────────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════════
+// FIREBASE CLOUD SYNC — مزامنة تلقائية بين الهاتف واللابتوب
+// ───────────────────────────────────────────────────────────
+// • Firebase Auth (تسجيل دخول بجوجل) + Cloud Firestore.
+// • مستند واحد لكل مستخدم جوجل + ملف مسار المحلي:
+//   المجموعة masaar_users، والمعرّف uid_u1 أو uid_u2.
+// • localStorage يبقى المصدر المحلي ويعمل دون إنترنت.
+// • لا تُزامَن أبداً: كلمات المرور المحلية، حالة القفل،
+//   ومفاتيح التحذيرات المؤقتة — فقط العادات والمالية والأرشيف.
+// • دمج "آخر كتابة تفوز" لكل قسم على حدة (عادات / مالية / أرشيف)
+//   باستخدام طوابع زمنية، فلا يمحو جهازٌ بياناتَ جهازٍ آخر.
+// ═══════════════════════════════════════════════════════════
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCPqu2hOmh9fgVGINOG0NxFDD7zdfRaGt4",
+  authDomain: "masar-4527f.firebaseapp.com",
+  projectId: "masar-4527f",
+  storageBucket: "masar-4527f.firebasestorage.app",
+  messagingSenderId: "534961846162",
+  appId: "1:534961846162:web:5999431dea1f24ac4cb34b"
+};
+const CLOUD = {
+  ready: false, user: null, status: 'off', lastSyncAt: null,
+  unsub: null, pushTimer: null, meta: {}, firstRemoteApplied: false
+};
+function cloudMetaKey() { return 'masaar_sync_meta_u' + CURRENT_USER; }
+function loadCloudMeta() { try { CLOUD.meta = JSON.parse(localStorage.getItem(cloudMetaKey())) || {}; } catch { CLOUD.meta = {}; } }
+function saveCloudMeta() { try { localStorage.setItem(cloudMetaKey(), JSON.stringify(CLOUD.meta)); } catch {} }
+function cloudDocRef() {
+  if (!CLOUD.user || typeof firebase === 'undefined' || !firebase.firestore) return null;
+  return firebase.firestore().collection('masaar_users').doc(CLOUD.user.uid + '_u' + CURRENT_USER);
+}
+function setSyncStatus(status, detail) { CLOUD.status = status; updateSyncUI(detail); }
+function updateSyncUI(detail) {
+  const dot = document.getElementById('syncDot'), txt = document.getElementById('syncText');
+  const state = document.getElementById('syncStateText'), email = document.getElementById('syncEmailText');
+  const badge = document.getElementById('syncBadge'), last = document.getElementById('syncLastText');
+  const inBtn = document.getElementById('syncSignInBtn'), nowBtn = document.getElementById('syncNowBtn'), outBtn = document.getElementById('syncSignOutBtn');
+  const map = {
+    off:     ['غير مسجَّل الدخول', '', 'غير مفعّلة'],
+    syncing: ['جارٍ المزامنة…', 'busy', 'جارٍ المزامنة…'],
+    synced:  ['متزامن ✓', 'on', 'متزامن ✓'],
+    offline: ['غير متصل — محفوظ محلياً', 'off', 'غير متصل']
+  };
+  const m = map[CLOUD.status] || map.off;
+  if (dot) dot.className = 'sync-dot' + (m[1] ? ' ' + m[1] : '');
+  if (txt) txt.textContent = detail || m[0];
+  if (state) state.textContent = detail || m[0];
+  if (badge) badge.textContent = m[2];
+  if (email) email.textContent = CLOUD.user ? (CLOUD.user.email || CLOUD.user.displayName || 'حساب جوجل متصل') : 'سجّل دخولك بحساب جوجل لمزامنة بياناتك تلقائياً بين الهاتف واللابتوب';
+  if (last) last.textContent = CLOUD.lastSyncAt ? new Date(CLOUD.lastSyncAt).toLocaleString('ar', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'numeric' }) : '—';
+  const signedIn = !!CLOUD.user;
+  if (inBtn) inBtn.style.display = signedIn ? 'none' : '';
+  if (nowBtn) nowBtn.style.display = signedIn ? '' : 'none';
+  if (outBtn) outBtn.style.display = signedIn ? '' : 'none';
+}
+function collectCloudPayload() {
+  return {
+    schemaVersion: 3,
+    app: APP,
+    finance: (typeof finLoad === 'function') ? finLoad() : {},
+    archive: (typeof loadArchive === 'function') ? loadArchive() : {},
+    updatedAt: {
+      app: CLOUD.meta.appUpdatedAt || 0,
+      finance: CLOUD.meta.financeUpdatedAt || 0,
+      archive: CLOUD.meta.archiveUpdatedAt || 0
+    },
+    updatedAtISO: new Date().toISOString()
+  };
+}
+function scheduleCloudPush(section) {
+  if (!CLOUD.user || !CLOUD.ready) return;
+  CLOUD.meta[section + 'UpdatedAt'] = Date.now();
+  saveCloudMeta();
+  setSyncStatus('syncing');
+  clearTimeout(CLOUD.pushTimer);
+  CLOUD.pushTimer = setTimeout(pushCloudNow, 2000);
+}
+async function pushCloudNow() {
+  const ref = cloudDocRef();
+  if (!ref) return;
+  try {
+    await ref.set(collectCloudPayload(), { merge: true });
+    CLOUD.meta.syncedApp = CLOUD.meta.appUpdatedAt || 0;
+    CLOUD.meta.syncedFinance = CLOUD.meta.financeUpdatedAt || 0;
+    CLOUD.meta.syncedArchive = CLOUD.meta.archiveUpdatedAt || 0;
+    CLOUD.lastSyncAt = Date.now();
+    saveCloudMeta();
+    setSyncStatus('synced');
+  } catch (e) {
+    console.error('Cloud push failed:', e);
+    setSyncStatus('offline', 'تعذّرت المزامنة — ستُعاد عند الاتصال');
+  }
+}
+function applyRemoteSection(data, remote) {
+  let _changed = false;
+  // نسخة احتياطية لمرة واحدة قبل أول استبدال ببيانات السحابة
+  if (!CLOUD.firstRemoteApplied) {
+    CLOUD.firstRemoteApplied = true;
+    try {
+      localStorage.setItem('masaar_local_backup_u' + CURRENT_USER, JSON.stringify({
+        at: new Date().toISOString(), app: APP,
+        finance: (typeof finLoad === 'function') ? finLoad() : {},
+        archive: (typeof loadArchive === 'function') ? loadArchive() : {}
+      }));
+    } catch {}
+  }
+  window._applyingRemote = true;
+  let changed = false;
+  try {
+    if (data.app && (remote.app || 0) > (CLOUD.meta.syncedApp || 0)) {
+      APP = Object.assign({ habits: [], log: {}, settings: {} }, data.app);
+      sanitizeApp(); save(); CLOUD.meta.syncedApp = remote.app; changed = true;
+    }
+    if (data.finance && (remote.finance || 0) > (CLOUD.meta.syncedFinance || 0)) {
+      finSave(data.finance); CLOUD.meta.syncedFinance = remote.finance; changed = true;
+    }
+    if (data.archive && (remote.archive || 0) > (CLOUD.meta.syncedArchive || 0)) {
+      saveArchive(data.archive); CLOUD.meta.syncedArchive = remote.archive; changed = true;
+    }
+    if (changed) {
+      _changed = true;
+      CLOUD.lastSyncAt = Date.now();
+      saveCloudMeta();
+      if (document.getElementById('app') && document.getElementById('app').classList.contains('visible')) renderAll();
+    }
+  } finally { window._applyingRemote = false; }
+  return _changed;
+}
+function startCloudListener() {
+  const ref = cloudDocRef();
+  if (!ref) return;
+  if (CLOUD.unsub) { CLOUD.unsub(); CLOUD.unsub = null; }
+  CLOUD.unsub = ref.onSnapshot((snap) => {
+    if (!snap.exists) { pushCloudNow(); return; }
+    const data = snap.data() || {};
+    if (applyRemoteSection(data, data.updatedAt || {})) setSyncStatus('synced');
+  }, (err) => {
+    console.error('Cloud listener error:', err);
+    setSyncStatus('offline', 'انقطع الاتصال بالسحابة — محفوظ محلياً');
+  });
+}
+function initCloudSync() {
+  if (window._cloudInit) { updateSyncUI(); return; }
+  window._cloudInit = true;
+  loadCloudMeta();
+  if (typeof firebase === 'undefined') { setSyncStatus('offline', 'تعذّر تحميل Firebase — تحقق من الإنترنت'); return; }
+  try { if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG); } catch (e) { console.error(e); }
+  CLOUD.ready = true;
+  updateSyncUI();
+  firebase.auth().onAuthStateChanged(async (user) => {
+    CLOUD.user = user || null;
+    if (CLOUD.unsub) { CLOUD.unsub(); CLOUD.unsub = null; }
+    if (!user) { setSyncStatus('off'); return; }
+    setSyncStatus('syncing');
+    try {
+      const ref = cloudDocRef();
+      const snap = await ref.get();
+      if (!snap.exists) {
+        CLOUD.meta.appUpdatedAt = CLOUD.meta.appUpdatedAt || Date.now();
+        CLOUD.meta.financeUpdatedAt = CLOUD.meta.financeUpdatedAt || Date.now();
+        CLOUD.meta.archiveUpdatedAt = CLOUD.meta.archiveUpdatedAt || Date.now();
+        saveCloudMeta();
+        await pushCloudNow();
+      }
+      startCloudListener();
+    } catch (e) {
+      console.error('Cloud init failed:', e);
+      setSyncStatus('offline', 'تعذّرت المزامنة — ستُعاد عند الاتصال');
+    }
+  });
+  if (!window._cloudOnlineInit) {
+    window._cloudOnlineInit = true;
+    window.addEventListener('online', () => { if (CLOUD.user) pushCloudNow(); });
+  }
+}
+async function cloudSignIn() {
+  if (typeof firebase === 'undefined' || !firebase.auth) { toast('تعذّر تحميل Firebase — تحقق من الإنترنت'); return; }
+  try {
+    await firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
+    toast('✓ تم تسجيل الدخول بجوجل — بدأت المزامنة');
+  } catch (e) {
+    if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request')) {
+      try { await firebase.auth().signInWithRedirect(new firebase.auth.GoogleAuthProvider()); }
+      catch (e2) { toast('تعذّر تسجيل الدخول بجوجل'); }
+    } else { toast('تعذّر تسجيل الدخول بجوجل'); }
+  }
+}
+async function cloudSignOut() {
+  try { if (CLOUD.unsub) { CLOUD.unsub(); CLOUD.unsub = null; } await firebase.auth().signOut(); } catch {}
+  CLOUD.user = null; setSyncStatus('off'); updateSyncUI();
+  toast('تم تسجيل الخروج من جوجل — بياناتك محفوظة على هذا الجهاز');
+}
+async function cloudSyncNow() {
+  if (!CLOUD.user) { toast('سجّل دخولك بجوجل أولاً'); return; }
+  setSyncStatus('syncing');
+  CLOUD.meta.appUpdatedAt = Date.now();
+  CLOUD.meta.financeUpdatedAt = Date.now();
+  CLOUD.meta.archiveUpdatedAt = Date.now();
+  saveCloudMeta();
+  await pushCloudNow();
+  toast('✓ تمت المزامنة');
+}
+
 function sanitizeApp() {
   if (!APP.habits) APP.habits = [];
   if (!APP.log) APP.log = {};
@@ -2307,7 +2541,7 @@ function sanitizeApp() {
   });
 }
 function save() { invalidateHabitMap(); clearRateCache();
-  try { localStorage.setItem(USERS[CURRENT_USER].storageKey, JSON.stringify(APP)); }
+  try { localStorage.setItem(USERS[CURRENT_USER].storageKey, JSON.stringify(APP)); if (!window._applyingRemote) scheduleCloudPush('app'); }
   catch(e) {
     if (e.name === 'QuotaExceededError' || e.code === 22)
       toast('⚠️ مساحة التخزين امتلأت — صدّر بياناتك ثم امسح القديمة');
@@ -2333,7 +2567,7 @@ function load() {
 /* ── helpers ── */
 function archiveKey() { return `masaar_archive_u${CURRENT_USER}`; }
 function loadArchive() { try { return JSON.parse(localStorage.getItem(archiveKey())) || {}; } catch { return {}; } }
-function saveArchive(a) { localStorage.setItem(archiveKey(), JSON.stringify(a)); }
+function saveArchive(a) { localStorage.setItem(archiveKey(), JSON.stringify(a)); if (!window._applyingRemote) scheduleCloudPush('archive'); }
 
 /* ── plain export ── */
 function exportData() {
@@ -3672,6 +3906,7 @@ function finLoad() {
 }
 function finSave(data) {
   localStorage.setItem(finKey(), JSON.stringify(data));
+  if (!window._applyingRemote) scheduleCloudPush('finance');
 }
 
 function finGetState() {
@@ -5007,6 +5242,7 @@ function renderSettings() {
 
   const hijriChk = document.getElementById('hijriToggle');
   if (hijriChk) hijriChk.checked = !!(APP.settings && APP.settings.hijri);
+  updateSyncUI();
   buildAchievements();
   renderLoginHistory();
   loadSavedPasswords();
@@ -5694,6 +5930,7 @@ function initHeatmapTooltip() {
 // ─────────────────────────────────────────
 function initApp() {
   load();
+  if (typeof initCloudSync === 'function') initCloudSync();
   // Clear old interval before creating new one (prevents accumulation on each unlock)
   if (window._clockInterval) { clearInterval(window._clockInterval); window._clockInterval = null; }
   updateClock();
