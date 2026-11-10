@@ -1033,6 +1033,8 @@ input[type=range]::-webkit-slider-thumb{
 .meals-hero-tomorrow .mht-title{font-weight:800;color:var(--tx);font-size:13px}
 .meals-hero-tomorrow .mht-line b{color:var(--tx)}
 .meals-hero-copy{margin-top:12px}
+.meals-setup-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 2px 16px}
+.meals-setup-hint{font-size:12px;color:var(--mu2)}
 </style>
 </head>
 <body>
@@ -1710,14 +1712,18 @@ input[type=range]::-webkit-slider-thumb{
 <section class="page" id="page-meals">
   <div class="topbar">
     <div><div class="tb-title">جدول <em>الوجبات</em></div><div class="tb-sub">خطط ماذا ستطلب كل يوم — الغداء والعشاء</div></div>
-    <div class="tb-actions">
+    <div class="tb-actions" id="mealsMonthNav" style="display:none">
       <button class="btn btn-sm" onclick="changeMealsMonth(0)"><i class="ti ti-calendar-today"></i>هذا الشهر</button>
       <button class="btn btn-icon-sm btn-sm" onclick="changeMealsMonth(-1)" title="الشهر السابق"><i class="ti ti-chevron-right"></i></button>
       <button class="btn btn-icon-sm btn-sm" onclick="changeMealsMonth(1)" title="الشهر التالي"><i class="ti ti-chevron-left"></i></button>
     </div>
   </div>
   <div class="card meals-hero mb" id="mealsHero"></div>
-  <div class="card">
+  <div class="meals-setup-bar">
+    <button class="btn btn-sm" id="mealsSetupBtn" onclick="toggleMealsSetup()" aria-expanded="false" aria-controls="mealsSetup"><i class="ti ti-calendar-plus"></i>إعداد وجبات الشهر</button>
+    <span class="meals-setup-hint">تظهر هنا وجبة اليوم فقط — افتح الإعداد لتعبئة أيام الشهر</span>
+  </div>
+  <div class="card" id="mealsSetup" style="display:none">
     <div class="ct"><i class="ti ti-tools-kitchen-2 ct-icon"></i><span id="mealsMonthTitle"></span><span class="ct-right" style="font-size:12px;color:var(--mu2)">كل أيام الشهر — اكتب وجبات الشهر كاملاً هنا</span></div>
     <div class="meals-list" id="mealsList"></div>
     <div style="font-size:12px;color:var(--mu2);margin-top:14px;line-height:1.8">اكتب اسم الوجبة أو المطعم في الخانة، واضغط على الحالة بعد الطلب والأكل. تُحفظ الوجبات تلقائياً وتتزامن بين الهاتف واللابتوب عند تسجيل الدخول بجوجل.</div>
@@ -2513,7 +2519,7 @@ const TEMPLATES_DATA = [
 // ─────────────────────────────────────────
 let APP = { habits: [], log: {}, settings: {} };
 let UI = {
-  page: 'dashboard', anaRange: 30, calYear: null, calMonth: null, mealsMonthYear: null, mealsMonthMonth: null,
+  page: 'dashboard', anaRange: 30, calYear: null, calMonth: null, mealsMonthYear: null, mealsMonthMonth: null, mealsSetupOpen: false,
   habitSort: 'streak',
   selMood: 3,       // مزاج اليومية
   checkinMood: 3,   // مزاج تسجيل اليوم (منفصل لتجنب التعارض)
@@ -3231,10 +3237,37 @@ function updateMealChips(date, type, status) {
     if (btn.dataset.status === status) btn.classList.add('on-' + status);
   });
 }
+function applyMealsSetupUI() {
+  // The meals page shows today's meal only. The month table (إعداد وجبات الشهر)
+  // is revealed on demand so the default view stays short and focused.
+  const open = UI.mealsSetupOpen === true;
+  const wrap = document.getElementById('mealsSetup');
+  const nav  = document.getElementById('mealsMonthNav');
+  const btn  = document.getElementById('mealsSetupBtn');
+  if (wrap) wrap.style.display = open ? '' : 'none';
+  if (nav)  nav.style.display  = open ? '' : 'none';
+  if (btn) {
+    btn.innerHTML = open
+      ? '<i class="ti ti-chevron-up"></i>إغلاق جدول الشهر'
+      : '<i class="ti ti-calendar-plus"></i>إعداد وجبات الشهر';
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+}
+function toggleMealsSetup() {
+  UI.mealsSetupOpen = !UI.mealsSetupOpen;
+  applyMealsSetupUI();
+  if (!UI.mealsSetupOpen) return;
+  renderMeals();
+  const wrap = document.getElementById('mealsSetup');
+  if (wrap && wrap.scrollIntoView) { try { wrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {} }
+}
 function renderMeals() {
   const list = document.getElementById('mealsList');
   if (!list) return;
   renderMealsHero();
+  applyMealsSetupUI();
+  // Only today's meal is shown by default; the month table is built when opened.
+  if (!UI.mealsSetupOpen) { renderMealsTomorrow(); return; }
   // Do not rebuild the list while the user is typing in it (e.g. a cloud
   // sync arriving from the other device): rebuilding would close the
   // keyboard and lose their place. Only the hero and "tomorrow" hint update.
@@ -6082,6 +6115,8 @@ function toast(msg) {
 // ─────────────────────────────────────────
 function switchPage(page) {
   UI.page = page;
+  // Always come back to the focused "today" view; the month table is opt-in.
+  if (page !== 'meals') UI.mealsSetupOpen = false;
   const pageTitles = {dashboard:'لوحة التحكم',habits:'العادات',checkin:'تسجيل اليوم',analytics:'التحليل',finance:'المالية',calendar:'التقويم',journal:'اليوميات',meals:'جدول الوجبات',settings:'الإعدادات'};
   document.title = (pageTitles[page] || page) + ' — مسار';
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
