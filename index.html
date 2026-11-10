@@ -248,6 +248,12 @@ body::before{
 .lock-btn:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(110,100,255,0.55)}
 .lock-btn:active{transform:translateY(0)}
 .lock-btn:disabled{opacity:0.5;cursor:not-allowed;transform:none}
+.lock-forgot-btn{display:block;width:100%;margin-top:14px;background:none;border:none;cursor:pointer;font-family:var(--font);font-size:13px;font-weight:600;color:var(--a2);text-align:center;padding:6px 4px;border-radius:8px;transition:color 0.2s, background 0.2s}
+.lock-forgot-btn:hover{color:#fff;background:rgba(110,100,255,0.08)}
+.lock-forgot-btn:disabled{opacity:0.5;cursor:not-allowed}
+.lock-recovery-msg{display:none;margin-top:10px;padding:10px 14px;border-radius:10px;font-size:12.5px;line-height:1.6;background:rgba(110,100,255,0.1);border:1px solid rgba(110,100,255,0.25);color:var(--a2);text-align:center}
+.lock-recovery-msg.show{display:block}
+.lock-recovery-msg.err{background:rgba(255,79,109,0.08);border-color:rgba(255,79,109,0.25);color:var(--re)}
 
 .lock-locked-state{
   display:none;flex-direction:column;align-items:center;
@@ -1022,6 +1028,8 @@ input[type=range]::-webkit-slider-thumb{
         تم قفل التطبيق بسبب المحاولات المتكررة<br>
         يُرجى الانتظار حتى انتهاء المؤقت
       </div>
+      <button class="lock-forgot-btn" id="forgotPwBtnLocked" type="button" onclick="startPasswordRecovery()">نسيت كلمة السر؟ استعدها بتسجيل الدخول بجوجل</button>
+      <div class="lock-recovery-msg" id="recoveryMsgLocked"></div>
     </div>
 
     <!-- Login Form -->
@@ -1071,6 +1079,8 @@ input[type=range]::-webkit-slider-thumb{
         <i class="ti ti-lock-open"></i>
         دخول
       </button>
+      <button class="lock-forgot-btn" id="forgotPwBtn" type="button" onclick="startPasswordRecovery()">نسيت كلمة السر؟ استعدها بتسجيل الدخول بجوجل</button>
+      <div class="lock-recovery-msg" id="recoveryMsg"></div>
     </div>
   </div>
 </div>
@@ -1981,6 +1991,7 @@ function selectUser(uid) {
   // Restart clock when unlocking
   if (!window._clockInterval) window._clockInterval = setInterval(updateClock, 15000);
   CURRENT_USER = uid;
+  _recoveryVerified = false;
   document.querySelectorAll('.user-opt').forEach((el,i) => el.classList.toggle('sel', i+1===uid));
   // reset form state per user
   const pwInp = document.getElementById('pwInput');
@@ -2129,6 +2140,130 @@ function attemptLogin() {
   }
 }
 
+// ─────────────────────────────────────────
+// PASSWORD RECOVERY — MAHMOUD ONLY (profile 1)
+// ─────────────────────────────────────────
+// Verified ONLY by a successful Google sign-in (Firebase Auth).
+// On success: clears ONLY Mahmoud's lock state (attempts / lockout)
+// in his own security record, keeps all habits / finance /
+// archive data untouched, and lets him in once so he can set a
+// new local password in Settings. There is NO bypass without a
+// successful Google sign-in, and NO password value is written,
+// stored or sent anywhere by this flow.
+// The one-time flag below lives only in memory: it is never saved
+// to localStorage, never synced to the cloud, and is cleared on
+// lock, on user switch, and after the password is changed.
+let _recoveryVerified = false;
+let _recoveryBusy = false;
+
+function showRecoveryMsg(text, isError) {
+  document.querySelectorAll('.lock-recovery-msg').forEach(el => {
+    el.textContent = text || '';
+    el.classList.toggle('show', !!text);
+    el.classList.toggle('err', !!isError);
+  });
+}
+function setRecoveryBusy(busy) {
+  _recoveryBusy = busy;
+  document.querySelectorAll('.lock-forgot-btn').forEach(btn => { btn.disabled = busy; });
+}
+function ensureFirebaseApp() {
+  if (typeof firebase === 'undefined' || !firebase.apps) return false;
+  try { if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG); } catch (e) { console.error(e); return false; }
+  return true;
+}
+async function handleRecoveryRedirect() {
+  // Only after a redirect sign-in started from the recovery button.
+  try {
+    if (sessionStorage.getItem('masaar_pw_recovery') !== '1') return false;
+  } catch { return false; }
+  try { sessionStorage.removeItem('masaar_pw_recovery'); } catch {}
+  if (!ensureFirebaseApp() || !firebase.auth) return false;
+  try {
+    const res = await firebase.auth().getRedirectResult();
+    const user = (res && res.user) || firebase.auth().currentUser;
+    if (user) {
+      completePasswordRecovery(user);
+      return _recoveryVerified === true;
+    }
+  } catch (e) { console.error(e); }
+  showRecoveryMsg('تعذّر التحقق بجوجل — حاول مجدداً', true);
+  return false;
+}
+async function startPasswordRecovery() {
+  if (_recoveryBusy) return;
+  // Recovery is offered for Mahmoud's profile only.
+  if (CURRENT_USER !== 1) { showRecoveryMsg('استعادة كلمة السر متاحة لملف محمود فقط', true); return; }
+  if (typeof firebase === 'undefined' || !firebase.auth) {
+    showRecoveryMsg('تعذّر تحميل Firebase — تحقق من الإنترنت وحاول مجدداً', true);
+    return;
+  }
+  if (!ensureFirebaseApp()) {
+    showRecoveryMsg('تعذّر تحميل Firebase — تحقق من الإنترنت وحاول مجدداً', true);
+    return;
+  }
+  setRecoveryBusy(true);
+  showRecoveryMsg('جارٍ فتح تسجيل الدخول بجوجل…', false);
+  try {
+    const res = await firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
+    const user = (res && res.user) || firebase.auth().currentUser;
+    if (!user) throw new Error('no-user');
+    completePasswordRecovery(user);
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'auth/popup-blocked' || code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      // iOS Safari often blocks popups: fall back to a redirect sign-in.
+      // The page reloads; handleRecoveryRedirect() finishes the flow.
+      try {
+        try { sessionStorage.setItem('masaar_pw_recovery', '1'); } catch {}
+        await firebase.auth().signInWithRedirect(new firebase.auth.GoogleAuthProvider());
+        return;
+      } catch (e2) { showRecoveryMsg('تعذّر تسجيل الدخول بجوجل — حاول مجدداً', true); }
+    } else if (code === 'auth/unauthorized-domain') {
+      showRecoveryMsg('هذا النطاق غير مصرّح به في Firebase — أضف نطاق الموقع إلى Authorized domains ثم حاول مجدداً', true);
+    } else if (code === 'auth/operation-not-allowed') {
+      showRecoveryMsg('تسجيل الدخول بجوجل غير مفعّل في Firebase — فعّله من Authentication ثم حاول مجدداً', true);
+    } else {
+      showRecoveryMsg('تعذّر تسجيل الدخول بجوجل — حاول مجدداً', true);
+    }
+  } finally {
+    setRecoveryBusy(false);
+  }
+}
+function completePasswordRecovery(user) {
+  if (CURRENT_USER !== 1 || !user) return;
+  // Clear ONLY Mahmoud's lock state; habits / finance / archive untouched.
+  const s = SECURITY.getState();
+  s.attempts = 0; s.lockedUntil = null; s.unlocked = true;
+  if (!s.loginHistory) s.loginHistory = [];
+  s.loginHistory.unshift({ ts: Date.now(), user: USERS[1].name });
+  if (s.loginHistory.length > 50) s.loginHistory = s.loginHistory.slice(0, 50);
+  SECURITY.saveState(s);
+  _recoveryVerified = true;
+  setRecoveryBusy(false);
+  showRecoveryMsg('', false);
+  if (lockCountdownTimer) { clearInterval(lockCountdownTimer); lockCountdownTimer = null; }
+  const ls = document.getElementById('lockedState'); if (ls) ls.classList.remove('show');
+  const lf = document.getElementById('loginForm'); if (lf) lf.style.display = 'block';
+  unlockApp(true);
+  // After the app opens, take him straight to Settings so he sets a new password now.
+  setTimeout(() => {
+    try {
+      if (typeof switchPage === 'function') switchPage('settings');
+      const msg = document.getElementById('cpMsg');
+      if (msg) {
+        msg.style.display = 'block';
+        msg.style.background = 'rgba(110,100,255,0.12)';
+        msg.style.border = '1px solid rgba(110,100,255,0.3)';
+        msg.style.color = 'var(--a2)';
+        msg.innerHTML = '<i class="ti ti-shield-check"></i> تم التحقق من هويتك بتسجيل الدخول بجوجل — عيّن كلمة سر جديدة الآن (لا حاجة لكلمة السر القديمة هذه المرة فقط)';
+      }
+      const np = document.getElementById('cpNew'); if (np) np.focus();
+      if (typeof toast === 'function') toast('✓ تم التحقق بجوجل — عيّن كلمة سر جديدة الآن');
+    } catch {}
+  }, 1400);
+}
+
 function unlockApp(animate) {
   const finish = () => {
     document.getElementById('lockScreen').style.display = 'none';
@@ -2144,6 +2279,7 @@ function unlockApp(animate) {
 }
 
 function _doLock() {
+  _recoveryVerified = false;
   if (window._clockInterval) { clearInterval(window._clockInterval); window._clockInterval = null; }
   SECURITY.lock();
   document.getElementById('app').classList.remove('visible');
@@ -5108,15 +5244,21 @@ function changePassword() {
     msgEl.innerHTML = (ok ? '<i class="ti ti-check"></i> ' : '<i class="ti ti-alert-circle"></i> ') + txt;
   };
 
-  if (!oldVal || !newVal || !conf) { showMsg('يرجى ملء جميع الحقول', false); return; }
+  // One-time exception: after a Google-verified recovery for Mahmoud,
+  // the forgotten old password is not required — this flag is in-memory
+  // only, set only by completePasswordRecovery(), and cleared below.
+  const recoveryBypass = (_recoveryVerified === true && CURRENT_USER === 1);
+  if (!recoveryBypass && (!oldVal || !newVal || !conf)) { showMsg('يرجى ملء جميع الحقول', false); return; }
+  if (recoveryBypass && (!newVal || !conf)) { showMsg('يرجى إدخال كلمة السر الجديدة وتأكيدها', false); return; }
 
-  // إصلاح: مقارنة كلمة السر الحالية مع ما هو محفوظ فعلاً (قد يختلف النوع)
-  const currentPw = USERS[CURRENT_USER].password;
-  if (oldVal !== currentPw) { showMsg('كلمة السر الحالية غير صحيحة', false); return; }
+  if (!recoveryBypass) {
+    const currentPw = USERS[CURRENT_USER].password;
+    if (oldVal !== currentPw) { showMsg('كلمة السر الحالية غير صحيحة', false); return; }
+  }
 
   if (newVal.length < 1) { showMsg('كلمة السر لا يمكن أن تكون فارغة', false); return; }
   if (newVal !== conf) { showMsg('كلمتا السر غير متطابقتان', false); return; }
-  if (newVal === oldVal) { showMsg('كلمة السر الجديدة مطابقة للقديمة — اختر كلمة مختلفة', false); return; }
+  if (!recoveryBypass && newVal === oldVal) { showMsg('كلمة السر الجديدة مطابقة للقديمة — اختر كلمة مختلفة', false); return; }
 
   // تحديث كلمة السر في الذاكرة
   USERS[CURRENT_USER].password = newVal;
@@ -5129,6 +5271,7 @@ function changePassword() {
     localStorage.setItem('masaar_pw_store', JSON.stringify(pwStore));
   } catch(e) { showMsg('تم التحديث في الجلسة الحالية فقط — تعذّر الحفظ الدائم', false); return; }
 
+  _recoveryVerified = false;
   document.getElementById('cpOld').value = '';
   document.getElementById('cpNew').value = '';
   document.getElementById('cpConfirm').value = '';
@@ -6159,7 +6302,11 @@ function loadSavedPasswords() {
 }
 initBgCanvas();
 loadSavedPasswords();
-initLockScreen();
+// If the user just came back from a Google redirect sign-in started
+// from "forgot password", finish the recovery instead of the lock screen.
+if (typeof handleRecoveryRedirect === 'function') {
+  handleRecoveryRedirect().then(recovered => { if (!recovered) initLockScreen(); });
+} else { initLockScreen(); }
 // إصلاح: إيقاف canvas عند إخفاء التبويب واستئنافه عند العودة
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && !window._bgAnimFrame && typeof initBgCanvas === 'function') {
