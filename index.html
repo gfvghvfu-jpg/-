@@ -1711,6 +1711,7 @@ input[type=range]::-webkit-slider-thumb{
           <button class="btn btn-primary btn-sm" id="syncSignInBtn" onclick="cloudSignIn()"><i class="ti ti-brand-google"></i>تسجيل الدخول بجوجل</button>
           <button class="btn btn-sm" id="syncNowBtn" onclick="cloudSyncNow()" style="display:none"><i class="ti ti-refresh"></i>مزامنة الآن</button>
           <button class="btn btn-sm btn-ghost" id="syncSignOutBtn" onclick="cloudSignOut()" style="display:none"><i class="ti ti-logout"></i>تسجيل الخروج من جوجل</button>
+          <button class="btn btn-sm" id="syncPurgeLegacyBtn" onclick="deleteLegacyProfileDoc()" style="display:none"><i class="ti ti-trash"></i>حذف بيانات الملف المحذوف</button>
         </div>
         <div style="font-size:11.5px;color:var(--mu2);margin-top:10px;line-height:1.7">بياناتك تُحفظ أولاً على جهازك، ثم تُزامَن إلى حساب جوجل الخاص بك فقط. عند انقطاع الإنترنت يستمر التطبيق بالعمل محلياً وتُستأنف المزامنة تلقائياً.</div>
       </div>
@@ -2165,6 +2166,13 @@ function showRecoveryMsg(text, isError) {
 // One shared mapper so no Firebase Auth failure is ever hidden behind a
 // generic message: every failure shows the real code (in parentheses)
 // plus a short Arabic explanation of what to do about it.
+// استعادة كلمة السر مقصورة على حساب جوجل صاحب التطبيق. أي حساب آخر
+// يُرفض ويُسجَّل خروجه فوراً، حتى لا يفتح أحد التطبيق بحسابه.
+const RECOVERY_EMAILS = ['gfvghvfu@gmail.com'];
+function isRecoveryAccount(user) {
+  const email = String((user && user.email) || '').trim().toLowerCase();
+  return RECOVERY_EMAILS.map(x => x.toLowerCase()).includes(email);
+}
 function authErrorMessage(e) {
   const code = (e && e.code) ? String(e.code) : '';
   const withCode = (msg) => code ? msg + ' (' + code + ')' : msg;
@@ -2263,6 +2271,11 @@ async function startPasswordRecovery() {
 }
 function completePasswordRecovery(user) {
   if (CURRENT_USER !== 1 || !user) return;
+  if (!isRecoveryAccount(user)) {
+    showRecoveryMsg(`حساب جوجل ${(user.email || '') || 'هذا'} غير مصرّح له باستعادة كلمة السر — استخدم حساب صاحب التطبيق`, true);
+    try { firebase.auth().signOut(); } catch {}
+    return;
+  }
   // Clear ONLY Mahmoud's lock state; habits / finance / archive untouched.
   const s = SECURITY.getState();
   s.attempts = 0; s.lockedUntil = null; s.unlocked = true;
@@ -2517,6 +2530,8 @@ function updateSyncUI(detail) {
   if (inBtn) inBtn.style.display = signedIn ? 'none' : '';
   if (nowBtn) nowBtn.style.display = signedIn ? '' : 'none';
   if (outBtn) outBtn.style.display = signedIn ? '' : 'none';
+  const purgeBtn = document.getElementById('syncPurgeLegacyBtn');
+  if (purgeBtn) purgeBtn.style.display = signedIn ? '' : 'none';
 }
 function collectCloudPayload() {
   return {
@@ -2597,6 +2612,22 @@ function applyRemoteSection(data, remote) {
     }
   } finally { window._applyingRemote = false; }
   return _changed;
+}
+// حذف مستند المزامنة القديم للملف المحذوف (u2) — بتأكيد صريح فقط،
+// ويمكن حذفه من الإعدادات عند تسجيل الدخول بجوجل.
+async function deleteLegacyProfileDoc() {
+  if (!CLOUD.user) { toast('سجّل الدخول بجوجل أولاً'); return; }
+  if (!confirm('حذف بيانات الملف المحذوف من السحابة نهائياً؟')) return;
+  if (!confirm('تأكيد أخير: لا يمكن التراجع عن هذا الحذف.')) return;
+  const ref = cloudDocRef();
+  if (!ref) { toast('تعذّر الوصول للسحابة'); return; }
+  try {
+    await firebase.firestore().collection('masaar_users').doc(CLOUD.user.uid + '_u2').delete();
+    toast('✓ حُذفت بيانات الملف المحذوف من السحابة');
+  } catch (e) {
+    console.error('Legacy doc delete failed:', e);
+    toast('تعذّر الحذف — تحقق من الاتصال وحاول مجدداً');
+  }
 }
 function startCloudListener() {
   const ref = cloudDocRef();
@@ -4240,6 +4271,7 @@ function finGetState() {
     setup: d.setup || false,
     // وضع منتصف الشهر
     midMonthRemaining: d.midMonthRemaining || 0,
+    tankWithdrawn: d.tankWithdrawn || 0,
     midMonthDays: d.midMonthDays || 0,
     midMonthStartDate: d.midMonthStartDate || null,
     nextSalaryDate: d.nextSalaryDate || null,
@@ -4247,61 +4279,70 @@ function finGetState() {
   };
 }
 
-function finDailyBudget(state) {
+// ─────────────────────────────────────────
+// FINANCE — PLAN (the single source of truth)
+// ─────────────────────────────────────────
+// The old code kept a running "tank" by adding (base - spent) on every save
+// and punished overspending by halving it against the next day only. That made
+// the numbers drift: the jar grew from money already spent, past-day edits used
+// today's base, and a big overspend was forgotten the day after.
+//
+// Everything is now derived from facts: how much money the current period
+// started with, how many days it covers, and what was actually recorded since
+// it started. Overspending raises what the remaining days must absorb, so the
+// allowance falls by itself — and pays itself back if you save.
+function finPlan(state) {
   const t = today();
-  // ── وضع منتصف الشهر ──
-  if (state.midMonthRemaining > 0 && state.nextSalaryDate && t < state.nextSalaryDate) {
-    const [ty, tm, td] = t.split('-').map(Number);
-    const [ny, nm, nd] = state.nextSalaryDate.split('-').map(Number);
-    const todayUTC = Date.UTC(ty, tm-1, td);
-    const nextUTC  = Date.UTC(ny, nm-1, nd);
-    const daysLeft = Math.max(1, Math.round((nextUTC - todayUTC) / 86400000));
-    const spentSoFar = Object.entries(state.log)
-      .filter(([k]) => k >= state.midMonthStartDate && k < t)
-      .reduce((sum, [,v]) => sum + v, 0);
-    const remaining = Math.max(0, state.midMonthRemaining - spentSoFar);
-    return parseFloat((remaining / daysLeft).toFixed(3));
-  }
-  // ── وضع عادي: قسّم على عدد الأيام في الفترة المالية (من تاريخ الراتب إلى تاريخ الراتب التالي) ──
-  const net = state.salary - state.fixed;
-  if (net <= 0) return 0;
-  const [ty, tm, td] = t.split('-').map(Number);
   const startDay = state.startDay || 1;
-  // تاريخ بداية الفترة الحالية
-  let periodStart, periodEnd;
-  if (td >= startDay) {
-    // الراتب وصل هذا الشهر
-    const maxDayCur = new Date(ty, tm, 0).getDate();
-    const actualStart = Math.min(startDay, maxDayCur);
-    periodStart = `${ty}-${String(tm).padStart(2,'0')}-${String(actualStart).padStart(2,'0')}`;
-    // نهاية الفترة: يوم قبل الراتب الشهر القادم
-    const nextMonth = tm === 12 ? 1 : tm + 1;
-    const nextYear  = tm === 12 ? ty + 1 : ty;
-    const maxDayNext = new Date(nextYear, nextMonth, 0).getDate();
-    const nextStart  = Math.min(startDay, maxDayNext);
-    const nextStartISO = `${nextYear}-${String(nextMonth).padStart(2,'0')}-${String(nextStart).padStart(2,'0')}`;
-    periodEnd = addDays(nextStartISO, -1);
+  const midActive = state.midMonthRemaining > 0 && state.nextSalaryDate && t <= state.nextSalaryDate;
+  let avail, start, end;
+  if (midActive) {
+    avail = state.midMonthRemaining;
+    start = state.midMonthStartDate || t;
+    end = addDays(state.nextSalaryDate, -1);
   } else {
-    // الراتب لم يصل بعد — الفترة بدأت الشهر الماضي
-    const prevMonth = tm === 1 ? 12 : tm - 1;
-    const prevYear  = tm === 1 ? ty - 1 : ty;
-    const maxDayPrev = new Date(prevYear, prevMonth, 0).getDate();
-    const prevStart  = Math.min(startDay, maxDayPrev);
-    periodStart = `${prevYear}-${String(prevMonth).padStart(2,'0')}-${String(prevStart).padStart(2,'0')}`;
-    // نهاية: يوم قبل الراتب هذا الشهر
-    const maxDayCur2 = new Date(ty, tm, 0).getDate();
-    const curStart   = Math.min(startDay, maxDayCur2);
-    const curStartISO = `${ty}-${String(tm).padStart(2,'0')}-${String(curStart).padStart(2,'0')}`;
-    periodEnd = addDays(curStartISO, -1);
+    avail = Math.max(0, (state.salary || 0) - (state.fixed || 0));
+    const range = finPeriodRange({ startDay });
+    start = range.start; end = range.end;
   }
-  // عدد الأيام في الفترة المالية
-  const [ps_y, ps_m, ps_d] = periodStart.split('-').map(Number);
-  const [pe_y, pe_m, pe_d] = periodEnd.split('-').map(Number);
-  const startUTC2 = Date.UTC(ps_y, ps_m-1, ps_d);
-  const endUTC2   = Date.UTC(pe_y, pe_m-1, pe_d);
-  const periodDays = Math.max(1, Math.round((endUTC2 - startUTC2) / 86400000) + 1);
-  return parseFloat((net / periodDays).toFixed(3));
+  const dayDiff = (a, b) => {
+    const [ay, am, ad] = a.split('-').map(Number);
+    const [by, bm, bd] = b.split('-').map(Number);
+    return Math.round((Date.UTC(ay, am - 1, ad) - Date.UTC(by, bm - 1, bd)) / 86400000);
+  };
+  const daysInPeriod = Math.max(1, dayDiff(end, start) + 1);
+  const elapsed = Math.min(daysInPeriod, Math.max(0, dayDiff(t, start)));
+  const yesterday = addDays(t, -1);
+  let spentSoFar = 0;
+  Object.entries(state.log || {}).forEach(([k, v]) => {
+    if (k >= start && k <= yesterday) spentSoFar += Number(v) || 0;
+  });
+  const remaining = Math.max(0, avail - spentSoFar);
+  const daysLeft = Math.max(1, daysInPeriod - elapsed);
+  const base = avail / daysInPeriod;              // المعدل المتساوي للفترة
+  const todayBudget = remaining / daysLeft;       // ما تبقى موزعاً على الأيام الباقية
+  // التوفير لا يُحتسب إلا عن الأيام المسجّلة فعلاً: يوم بلا سجل ليس توفيراً
+  let loggedDays = 0;
+  Object.keys(state.log || {}).forEach(k => { if (k >= start && k <= yesterday) loggedDays++; });
+  const derivedJar = base * loggedDays - spentSoFar;
+  const withdrawn = Number(state.tankWithdrawn) || 0;
+  return {
+    avail,
+    start, end,
+    daysInPeriod, elapsed, daysLeft,
+    spentSoFar, remaining,
+    base: parseFloat(base.toFixed(3)),
+    todayBudget: parseFloat(todayBudget.toFixed(3)),
+    derivedJar: parseFloat(Math.max(0, derivedJar).toFixed(3)),
+    jar: parseFloat(Math.max(0, Math.min(derivedJar, remaining) - withdrawn).toFixed(3)),
+  };
 }
+function finRecomputeTank(state) {
+  state.weekend = finPlan(state).jar;
+  return state.weekend;
+}
+function finDailyBudget(state) { return finPlan(state).base; }
+
 
 function finTodayKey() { return today(); } // alias — same as today()
 
@@ -4316,19 +4357,7 @@ function finDaysSinceStart(state) {
 }
 
 // Calculate today's budget spreading large deficits over up to 3 days
-function finTodayBudget(state) {
-  const base = finDailyBudget(state);
-  if (!base) return 0;
-  // إصلاح: استخدام addDays() بدل new Date()+setDate() لتجنب DST
-  const yKey = addDays(today(), -1);
-  const spent = state.log[yKey];
-  if (spent !== undefined && spent > base) {
-    const overspend = spent - base;
-    const adjusted = base - (overspend / 2);
-    return parseFloat(Math.max(0, adjusted).toFixed(3));
-  }
-  return parseFloat(base.toFixed(3));
-}
+function finTodayBudget(state) { return finPlan(state).todayBudget; }
 
 function finPeriodRange(state) {
   // يُعيد { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } للفترة المالية الحالية
@@ -4365,6 +4394,7 @@ function finMonthLog(state) {
 function renderFinance() {
   if (!document.getElementById('page-finance').classList.contains('active')) return;
   const state = finGetState();
+  finRecomputeTank(state); // العرض يطابق الحساب دائماً
 
   if (!state.setup) {
     document.getElementById('finThemeBanner').style.background = 'rgba(110,100,255,0.08)';
@@ -4579,9 +4609,9 @@ function renderFinance() {
   const totalSpent  = monthLog.reduce((s,[,v]) => s + v, 0);
   const avgSpent    = monthLog.length ? (totalSpent / monthLog.length) : 0;
   const savedDays   = monthLog.filter(([,v]) => v <= base).length;
-  const projected   = avgSpent * periodTotalDays;
-  const net         = state.salary - state.fixed;
-  const projSavings = net - projected;
+  const finPl       = finPlan(state);
+  const projected   = avgSpent * finPl.daysInPeriod;
+  const projSavings = finPl.avail - projected;
   document.getElementById('finInsightCards').innerHTML = [
     { ico: '💰', val: totalSpent.toFixed(3),  lbl: 'إجمالي الفترة', c: 'var(--am)', sub: 'ريال' },
     { ico: '📊', val: avgSpent.toFixed(3),    lbl: 'متوسط يومي',    c: 'var(--cy)', sub: 'ريال' },
@@ -4656,15 +4686,15 @@ function finSaveDay() {
   const inp = document.getElementById('finSpentInput');
   const val = parseFloat(inp.value);
   if (isNaN(val) || val < 0) { toast('أدخل مبلغاً صحيحاً'); return; }
-  const base = finDailyBudget(state);
-  const todayBudget = finTodayBudget(state);
+  const plan = finPlan(state);
 
-  // Emergency simulator check: if > 1.8x daily budget, warn user
-  if (val > base * 1.8) {
-    const excess = val - todayBudget;
-    const nextDayBudget = Math.max(0, base - Math.max(0, excess));
+  // Emergency simulator check: a spend far above today's allowance
+  if (plan.todayBudget > 0 && val > plan.todayBudget * 1.8) {
+    const leftAfter = Math.max(0, plan.remaining - val);
+    const daysAfter = Math.max(1, plan.daysLeft - 1);
+    const nextDayBudget = leftAfter / daysAfter;
     document.getElementById('finSimText').innerHTML =
-      `إذا أكدت صرف <strong style="color:var(--am)">${val.toFixed(3)} ريال</strong> اليوم، فإن ميزانيتك للأيام القادمة ستنخفض تلقائياً من <strong>${base.toFixed(3)}</strong> إلى <strong style="color:var(--re)">${nextDayBudget.toFixed(3)} ريال</strong> للمحافظة على توازن الشهر. هل أنت موافق؟`;
+      `إذا أكدت صرف <strong style="color:var(--am)">${val.toFixed(3)} ريال</strong> اليوم، يصبح المتبقي للفترة <strong>${leftAfter.toFixed(3)}</strong> ريال على <strong>${daysAfter}</strong> يوماً، أي نحو <strong style="color:var(--re)">${nextDayBudget.toFixed(3)} ريال</strong> يومياً. هل أنت موافق؟`;
     document.getElementById('finSimulator').style.display = 'block';
     return;
   }
@@ -4679,21 +4709,8 @@ function finConfirmEmergency() {
 
 function finConfirmSave(val) {
   const state = finGetState();
-  const base = finDailyBudget(state);
-  const todayKey = finTodayKey(); // إصلاح: تجنب تعارض اسم المتغير مع دالة today()
-
-  // If today was already saved, reverse the previous tank effect first
-  const prevVal = state.log[todayKey];
-  if (prevVal !== undefined && prevVal < base) {
-    state.weekend = parseFloat(Math.max(0, state.weekend - (base - prevVal)).toFixed(3));
-  }
-
-  state.log[todayKey] = val;
-
-  if (val < base) {
-    state.weekend = parseFloat((state.weekend + (base - val)).toFixed(3));
-  }
-
+  state.log[finTodayKey()] = val;
+  finRecomputeTank(state); // الخزان والحد اليومي يُعاد حسابهما من السجل
   finSave(state);
   document.getElementById('finSpentInput').value = '';
   document.getElementById('finSimulator').style.display = 'none';
@@ -4757,16 +4774,8 @@ function finSavePastDay() {
     if (msgEl) { msgEl.style.display = 'block'; msgEl.style.color = 'var(--re)'; msgEl.textContent = '⚠️ أدخل مبلغاً صحيحاً'; setTimeout(() => { msgEl.style.display = 'none'; }, 3000); }
     return;
   }
-  const base = finDailyBudget(state);
-  // تعديل تأثير خزان التوفير
-  const prevVal = state.log[date];
-  if (prevVal !== undefined && prevVal < base) {
-    state.weekend = parseFloat(Math.max(0, state.weekend - (base - prevVal)).toFixed(3));
-  }
   state.log[date] = val;
-  if (val < base) {
-    state.weekend = parseFloat((state.weekend + (base - val)).toFixed(3));
-  }
+  finRecomputeTank(state); // السجل هو المصدر: أي تعديل يعيد حساب الخزان والحد
   finSave(state);
   // تحديث نص الـ option بالقيمة الجديدة
   const opt = sel.querySelector(`option[value="${date}"]`);
@@ -4790,13 +4799,14 @@ function finPreviewSimulator() {
   const state = finGetState();
   if (!state.setup) return;
   const val = parseFloat(document.getElementById('finSpentInput').value);
-  const base = finDailyBudget(state);
+  const plan = finPlan(state);
   const sim = document.getElementById('finSimulator');
-  if (!isNaN(val) && val > base * 1.8) {
-    const excess = val - finTodayBudget(state);
-    const nextDay = Math.max(0, base - Math.max(0, excess));
+  if (!isNaN(val) && plan.todayBudget > 0 && val > plan.todayBudget * 1.8) {
+    const leftAfter = Math.max(0, plan.remaining - val);
+    const daysAfter = Math.max(1, plan.daysLeft - 1);
+    const nextDay = leftAfter / daysAfter;
     document.getElementById('finSimText').innerHTML =
-      `إذا أكدت صرف <strong style="color:var(--am)">${val.toFixed(3)} ريال</strong>، ستنخفض ميزانية الغد إلى <strong style="color:var(--re)">${nextDay.toFixed(3)} ريال</strong> تلقائياً. هل أنت موافق؟`;
+      `إذا أكدت صرف <strong style="color:var(--am)">${val.toFixed(3)} ريال</strong>، يصبح المتبقي ${leftAfter.toFixed(3)} ريال على ${daysAfter} يوماً ≈ <strong style="color:var(--re)">${nextDay.toFixed(3)} ريال</strong> يومياً. هل أنت موافق؟`;
     sim.style.display = 'block';
   } else {
     sim.style.display = 'none';
@@ -4872,19 +4882,23 @@ function finUpdateDaysRemaining() {
 function finUpdateSetupPreview() {
   const sal = parseFloat(document.getElementById('finSalary').value) || 0;
   const fix = parseFloat(document.getElementById('finFixed').value) || 0;
+  const startDay = parseInt(document.getElementById('finStartDay').value) || 1;
   const rem = parseFloat(document.getElementById('finRemainingBudget')?.value) || 0;
   const net = sal - fix;
-  const t = today();
-  const [y, m] = t.split('-').map(Number);
-  const days = new Date(y, m, 0).getDate();
-  const daily = net > 0 ? (net / days).toFixed(3) : '—';
-  const saved = sal > 0 ? ((net / sal) * 100).toFixed(0) : 0;
+  // الميزانية اليومية تُحسب على طول الفترة المالية (يوم الراتب ← يوم الراتب)
+  const range = finPeriodRange({ startDay });
+  const [sy, sm, sd] = range.start.split('-').map(Number);
+  const [ey, em, ed] = range.end.split('-').map(Number);
+  const periodDays = Math.max(1, Math.round((Date.UTC(ey, em - 1, ed) - Date.UTC(sy, sm - 1, sd)) / 86400000) + 1);
+  const daily = net > 0 ? (net / periodDays).toFixed(3) : '—';
+  const fixedPct = sal > 0 ? ((fix / sal) * 100).toFixed(0) : 0;
 
   let remPreview = '';
   if (rem > 0) {
     const daysLeftEl = document.getElementById('finDaysRemaining');
     const daysLeftManual = daysLeftEl && daysLeftEl.value ? parseInt(daysLeftEl.value) : 0;
     const daysLeft = daysLeftManual > 0 ? daysLeftManual : finUpdateDaysRemaining();
+    // المعروض هنا يجب أن يطابق ما سيُحسب فعلاً: المبلغ موزعاً على ما بقي من أيام
     const remDaily = daysLeft > 0 ? (rem / daysLeft).toFixed(3) : '—';
     remPreview = `<div style="margin-top:8px;padding:8px;background:rgba(110,100,255,0.08);border-radius:var(--r4);border:1px solid rgba(110,100,255,0.2)">
       <div style="color:var(--a2);font-weight:700;font-size:12px;margin-bottom:4px">📅 وضع منتصف الشهر</div>
@@ -4897,8 +4911,8 @@ function finUpdateSetupPreview() {
 
   document.getElementById('finSetupPreview').innerHTML = `
     <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>الراتب الصافي القابل للصرف:</span><strong style="color:var(--gr)">${net.toFixed(3)} ر.ع</strong></div>
-    <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>الميزانية اليومية الكاملة:</span><strong style="color:var(--a2)">${daily} ر.ع / يوم</strong></div>
-    ${fix > 0 ? `<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>نسبة المصاريف الثابتة:</span><strong style="color:var(--am)">${saved}% من الراتب</strong></div>` : ''}
+    <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>الميزانية اليومية على ${periodDays} يوماً:</span><strong style="color:var(--a2)">${daily} ر.ع / يوم</strong></div>
+    ${fix > 0 ? `<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>نسبة المصاريف الثابتة:</span><strong style="color:var(--am)">${fixedPct}% من الراتب</strong></div>` : ''}
     ${remPreview}
   `;
 }
@@ -4917,7 +4931,9 @@ function setTankGoal() {
 }
 function resetTank() {
   if (!confirm('تأكيد صرف خزان الويكند وإعادته للصفر؟ هذا الإجراء لا يمكن التراجع عنه.')) return;
-  const state = finGetState(); state.weekend = 0; state.tankGoal = 0; finSave(state);
+  const state = finGetState();
+  state.tankWithdrawn = parseFloat(((Number(state.tankWithdrawn) || 0) + finRecomputeTank(state)).toFixed(3));
+  state.weekend = 0; state.tankGoal = 0; finSave(state);
   renderFinance(); toast('تم صرف الخزان وإعادة ضبطه');
 }
 
@@ -4934,7 +4950,9 @@ function partialWithdrawTank() {
   };
   if (isNaN(val) || val <= 0) { showMsg('⚠️ أدخل مبلغاً صحيحاً أكبر من صفر', false); return; }
   const state = finGetState();
+  finRecomputeTank(state);
   if (val > state.weekend) { showMsg(`⚠️ المبلغ أكبر من الخزان (${state.weekend.toFixed(3)} ر.ع)`, false); return; }
+  state.tankWithdrawn = parseFloat(((Number(state.tankWithdrawn) || 0) + val).toFixed(3));
   state.weekend = parseFloat(Math.max(0, state.weekend - val).toFixed(3));
   finSave(state);
   inp.value = '';
