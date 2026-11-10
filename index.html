@@ -4610,8 +4610,9 @@ function renderFinance() {
   const avgSpent    = monthLog.length ? (totalSpent / monthLog.length) : 0;
   const savedDays   = monthLog.filter(([,v]) => v <= base).length;
   const finPl       = finPlan(state);
-  const projected   = avgSpent * finPl.daysInPeriod;
-  const projSavings = finPl.avail - projected;
+  // التوقع = ما بقي فعلاً ناقص تقدير الصرف في الأيام الباقية فقط.
+  // ضرب المتوسط في طول الفترة كان يحسب الأيام غير المسجّلة كأنها مصروفة.
+  const projSavings = finPl.remaining - avgSpent * finPl.daysLeft;
   document.getElementById('finInsightCards').innerHTML = [
     { ico: '💰', val: totalSpent.toFixed(3),  lbl: 'إجمالي الفترة', c: 'var(--am)', sub: 'ريال' },
     { ico: '📊', val: avgSpent.toFixed(3),    lbl: 'متوسط يومي',    c: 'var(--cy)', sub: 'ريال' },
