@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Each user may only read/write their own Masaar sync document.
+    // Document id is "<Firebase uid>_u1" or "<Firebase uid>_u2".
+    match /masaar_users/{docId} {
+      allow read, write: if request.auth != null
+        && docId.split('_u')[0] == request.auth.uid;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
