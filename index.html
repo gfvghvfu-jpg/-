@@ -2163,6 +2163,42 @@ function showRecoveryMsg(text, isError) {
     el.classList.toggle('err', !!isError);
   });
 }
+// One shared mapper so no Firebase Auth failure is ever hidden behind a
+// generic message: every failure shows the real code (in parentheses)
+// plus a short Arabic explanation of what to do about it.
+function authErrorMessage(e) {
+  const code = (e && e.code) ? String(e.code) : '';
+  const withCode = (msg) => code ? msg + ' (' + code + ')' : msg;
+  switch (code) {
+    case 'auth/unauthorized-domain':
+      return withCode('هذا النطاق غير مصرّح به في Firebase — أضف gfvghvfu-jpg.github.io إلى Authorized domains ثم حاول مجدداً');
+    case 'auth/operation-not-allowed':
+      return withCode('تسجيل الدخول بجوجل غير مفعّل في Firebase — فعّله من Authentication ثم حاول مجدداً');
+    case 'auth/popup-blocked':
+      return withCode('حظرت النافذة المنبثقة — اسمح بالنوافذ المنبثقة أو افتح الموقع مباشرة في سفاري وحاول مجدداً');
+    case 'auth/popup-closed-by-user':
+      return withCode('أُغلقت نافذة جوجل قبل إكمال الدخول — حاول مجدداً وأكمل تسجيل الدخول');
+    case 'auth/cancelled-popup-request':
+      return withCode('أُلغي طلب تسجيل الدخول — انتظر قليلاً وحاول مجدداً مرة واحدة فقط');
+    case 'auth/network-request-failed':
+      return withCode('تعذّر الاتصال بجوجل — تحقق من الإنترنت وحاول مجدداً');
+    case 'auth/web-storage-unsupported':
+      return withCode('المتصفح يمنع التخزين اللازم للدخول — افتح الموقع مباشرة في سفاري وليس داخل تطبيق آخر');
+    case 'auth/operation-not-supported-in-this-environment':
+      return withCode('هذا المتصفح لا يدعم تسجيل الدخول بجوجل — افتح الموقع مباشرة في سفاري');
+    case 'auth/user-cancelled':
+    case 'auth/redirect-cancelled-by-user':
+      return withCode('ألغيت تسجيل الدخول بجوجل — حاول مجدداً');
+    case 'auth/invalid-api-key':
+      return withCode('إعدادات Firebase في التطبيق غير صحيحة — تحقق من إعدادات المشروع');
+    case 'auth/redirect-no-user':
+      return withCode('لم يكتمل تسجيل الدخول بعد العودة من جوجل — اضغط زر الاستعادة وحاول مجدداً');
+    case 'auth/no-user':
+      return withCode('لم يكتمل تسجيل الدخول بجوجل — حاول مجدداً');
+    default:
+      return withCode('تعذّر تسجيل الدخول بجوجل — حاول مجدداً');
+  }
+}
 function setRecoveryBusy(busy) {
   _recoveryBusy = busy;
   document.querySelectorAll('.lock-forgot-btn').forEach(btn => { btn.disabled = busy; });
@@ -2178,7 +2214,7 @@ async function handleRecoveryRedirect() {
     if (sessionStorage.getItem('masaar_pw_recovery') !== '1') return false;
   } catch { return false; }
   try { sessionStorage.removeItem('masaar_pw_recovery'); } catch {}
-  if (!ensureFirebaseApp() || !firebase.auth) return false;
+  if (!ensureFirebaseApp() || !firebase.auth) { showRecoveryMsg('تعذّر تحميل Firebase — تحقق من الإنترنت وحاول مجدداً (auth/firebase-not-loaded)', true); return false; }
   try {
     const res = await firebase.auth().getRedirectResult();
     const user = (res && res.user) || firebase.auth().currentUser;
@@ -2186,8 +2222,8 @@ async function handleRecoveryRedirect() {
       completePasswordRecovery(user);
       return _recoveryVerified === true;
     }
-  } catch (e) { console.error(e); }
-  showRecoveryMsg('تعذّر التحقق بجوجل — حاول مجدداً', true);
+  } catch (e) { console.error(e); showRecoveryMsg(authErrorMessage(e), true); return false; }
+  showRecoveryMsg(authErrorMessage({ code: 'auth/redirect-no-user' }), true);
   return false;
 }
 async function startPasswordRecovery() {
@@ -2207,7 +2243,7 @@ async function startPasswordRecovery() {
   try {
     const res = await firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
     const user = (res && res.user) || firebase.auth().currentUser;
-    if (!user) throw new Error('no-user');
+    if (!user) { const _e = new Error('no-user'); _e.code = 'auth/no-user'; throw _e; }
     completePasswordRecovery(user);
   } catch (e) {
     const code = e && e.code;
@@ -2218,13 +2254,9 @@ async function startPasswordRecovery() {
         try { sessionStorage.setItem('masaar_pw_recovery', '1'); } catch {}
         await firebase.auth().signInWithRedirect(new firebase.auth.GoogleAuthProvider());
         return;
-      } catch (e2) { showRecoveryMsg('تعذّر تسجيل الدخول بجوجل — حاول مجدداً', true); }
-    } else if (code === 'auth/unauthorized-domain') {
-      showRecoveryMsg('هذا النطاق غير مصرّح به في Firebase — أضف نطاق الموقع إلى Authorized domains ثم حاول مجدداً', true);
-    } else if (code === 'auth/operation-not-allowed') {
-      showRecoveryMsg('تسجيل الدخول بجوجل غير مفعّل في Firebase — فعّله من Authentication ثم حاول مجدداً', true);
+      } catch (e2) { showRecoveryMsg(authErrorMessage(e2), true); }
     } else {
-      showRecoveryMsg('تعذّر تسجيل الدخول بجوجل — حاول مجدداً', true);
+      showRecoveryMsg(authErrorMessage(e), true);
     }
   } finally {
     setRecoveryBusy(false);
@@ -2622,8 +2654,8 @@ async function cloudSignIn() {
   } catch (e) {
     if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request')) {
       try { await firebase.auth().signInWithRedirect(new firebase.auth.GoogleAuthProvider()); }
-      catch (e2) { toast('تعذّر تسجيل الدخول بجوجل'); }
-    } else { toast('تعذّر تسجيل الدخول بجوجل'); }
+      catch (e2) { toast(authErrorMessage(e2)); }
+    } else { toast(authErrorMessage(e)); }
   }
 }
 async function cloudSignOut() {
