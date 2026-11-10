@@ -993,27 +993,28 @@ input[type=range]::-webkit-slider-thumb{
 .sync-dot.busy{background:#ffb830;box-shadow:0 0 8px rgba(255,184,48,0.7);animation:syncPulse 1.2s infinite}
 .sync-dot.off{background:#ff4f6d}
 @keyframes syncPulse{50%{opacity:0.45}}
-/* ── Meals schedule table ── */
-.meals-wrap{overflow-x:auto;border-radius:var(--r2)}
-.meals-tbl{width:100%;border-collapse:separate;border-spacing:0;min-width:760px;font-size:13px}
-.meals-tbl th,.meals-tbl td{padding:8px;border-bottom:1px solid var(--bd);vertical-align:top;text-align:right}
-.meals-tbl thead th{background:var(--s3);font-size:12px;color:var(--tx2);position:sticky;top:0}
-.meals-tbl thead th.today-col{background:rgba(110,100,255,0.16);color:var(--a2)}
-.meals-tbl thead th.tomorrow-col{background:rgba(40,212,245,0.08);color:var(--cy)}
-.meals-tbl td.today-col{background:rgba(110,100,255,0.06)}
-.meals-tbl td.tomorrow-col{background:rgba(40,212,245,0.04)}
-.meal-cell{display:flex;flex-direction:column;gap:6px}
-.meal-cell input{width:100%;height:34px;font-size:12.5px;padding:0 10px}
-.meal-cell select{width:100%;height:30px;font-size:11.5px;padding:0 8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:var(--tx);font-family:var(--font);outline:none;cursor:pointer}
-.meal-row-label{font-weight:700;font-size:12.5px;color:var(--tx2);white-space:nowrap}
-.meal-row-label i{margin-left:5px;color:var(--a2)}
+/* ── Meals schedule — monthly grid ── */
+.meals-month-wrap{overflow-x:auto;border-radius:var(--r2)}
+.meals-month-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;min-width:720px}
+.meals-month-dh{font-size:11.5px;font-weight:700;color:var(--tx2);text-align:center;padding:4px 0}
+.meals-day{background:var(--s2);border:1px solid var(--bd);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:7px;min-height:158px}
+.meals-day.empty{background:transparent;border-style:dashed;opacity:0.35;min-height:158px}
+.meals-day.today-day{border-color:rgba(110,100,255,0.55);background:rgba(110,100,255,0.07)}
+.meals-day.tomorrow-day{border-color:rgba(40,212,245,0.4);background:rgba(40,212,245,0.04)}
+.meals-day-head{display:flex;align-items:flex-start;justify-content:space-between;gap:4px}
+.meals-day-num{font-weight:800;font-size:14px;line-height:1.2}
+.meals-day-num small{display:block;font-size:10.5px;color:var(--mu2);font-weight:400}
+.meal-cell{display:flex;flex-direction:column;gap:5px}
+.meal-cell input{width:100%;height:32px;font-size:12px;padding:0 9px}
+.meal-cell select{width:100%;height:28px;font-size:11px;padding:0 7px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:var(--tx);font-family:var(--font);outline:none;cursor:pointer}
+.meal-row-label{font-weight:700;font-size:11.5px;color:var(--tx2);white-space:nowrap}
+.meal-row-label i{margin-left:4px;color:var(--a2)}
 .meals-tomorrow{display:flex;flex-wrap:wrap;gap:10px}
 .meals-tomorrow-item{flex:1;min-width:140px;background:var(--s3);border:1px solid var(--bd);border-radius:var(--r2);padding:12px 14px}
 .meals-tomorrow-item .mt-label{font-size:11px;color:var(--mu2);font-weight:700;margin-bottom:4px}
 .meals-tomorrow-item .mt-name{font-size:14px;font-weight:700}
-.meals-day-clear{background:none;border:none;color:var(--mu);cursor:pointer;font-size:11px;padding:2px 4px}
+.meals-day-clear{background:none;border:none;color:var(--mu);cursor:pointer;font-size:11px;padding:2px 4px;flex-shrink:0}
 .meals-day-clear:hover{color:var(--re)}
-@media (max-width:768px){.meals-tbl{min-width:640px}}
 </style>
 </head>
 <body>
@@ -1690,11 +1691,11 @@ input[type=range]::-webkit-slider-thumb{
 <!-- ══════ MEALS ══════ -->
 <section class="page" id="page-meals">
   <div class="topbar">
-    <div><div class="tb-title">جدول <em>الوجبات</em></div><div class="tb-sub">خطط ماذا ستطلب كل يوم — الغداء والعشاء (والفطور إن أردت)</div></div>
+    <div><div class="tb-title">جدول <em>الوجبات</em></div><div class="tb-sub">خطط ماذا ستطلب كل يوم — الغداء والعشاء</div></div>
     <div class="tb-actions">
-      <button class="btn btn-sm" onclick="changeMealsWeek(0)"><i class="ti ti-calendar-today"></i>هذا الأسبوع</button>
-      <button class="btn btn-icon-sm btn-sm" onclick="changeMealsWeek(-1)" title="الأسبوع السابق"><i class="ti ti-chevron-right"></i></button>
-      <button class="btn btn-icon-sm btn-sm" onclick="changeMealsWeek(1)" title="الأسبوع التالي"><i class="ti ti-chevron-left"></i></button>
+      <button class="btn btn-sm" onclick="changeMealsMonth(0)"><i class="ti ti-calendar-today"></i>هذا الشهر</button>
+      <button class="btn btn-icon-sm btn-sm" onclick="changeMealsMonth(-1)" title="الشهر السابق"><i class="ti ti-chevron-right"></i></button>
+      <button class="btn btn-icon-sm btn-sm" onclick="changeMealsMonth(1)" title="الشهر التالي"><i class="ti ti-chevron-left"></i></button>
     </div>
   </div>
   <div class="card mb">
@@ -1702,10 +1703,10 @@ input[type=range]::-webkit-slider-thumb{
     <div class="meals-tomorrow" id="mealsTomorrow"></div>
   </div>
   <div class="card">
-    <div class="ct"><i class="ti ti-tools-kitchen-2 ct-icon"></i><span id="mealsWeekTitle"></span><span class="ct-right ct-sub" id="mealsWeekStats"></span></div>
-    <div class="meals-wrap"><table class="meals-tbl" id="mealsTable"></table></div>
+    <div class="ct"><i class="ti ti-tools-kitchen-2 ct-icon"></i><span id="mealsMonthTitle"></span><span class="ct-right ct-sub" id="mealsMonthStats"></span></div>
+    <div class="meals-month-wrap"><div class="meals-month-grid" id="mealsMonthGrid"></div></div>
     <div style="display:flex;justify-content:flex-end;margin-top:14px">
-      <button class="btn btn-sm btn-danger" onclick="clearMealsWeek()"><i class="ti ti-trash"></i>مسح وجبات هذا الأسبوع</button>
+      <button class="btn btn-sm btn-danger" onclick="clearMealsMonth()"><i class="ti ti-trash"></i>مسح وجبات هذا الشهر</button>
     </div>
     <div style="font-size:11.5px;color:var(--mu2);margin-top:10px;line-height:1.8">اكتب اسم الوجبة أو المطعم في الخانة، وغيّر الحالة إلى «تم الطلب» بعد الطلب و«تم الأكل» بعد الأكل. تُحفظ الوجبات تلقائياً وتتزامن بين الهاتف واللابتوب عند تسجيل الدخول بجوجل.</div>
   </div>
@@ -2500,7 +2501,7 @@ const TEMPLATES_DATA = [
 // ─────────────────────────────────────────
 let APP = { habits: [], log: {}, settings: {} };
 let UI = {
-  page: 'dashboard', anaRange: 30, calYear: null, calMonth: null, mealsWeekStart: null,
+  page: 'dashboard', anaRange: 30, calYear: null, calMonth: null, mealsMonthYear: null, mealsMonthMonth: null,
   habitSort: 'streak',
   selMood: 3,       // مزاج اليومية
   checkinMood: 3,   // مزاج تسجيل اليوم (منفصل لتجنب التعارض)
@@ -3007,8 +3008,9 @@ function clearAll() {
 // ─────────────────────────────────────────
 // MEALS SCHEDULE — جدول الوجبات
 // ─────────────────────────────────────────
-// • أسبوع يبدأ السبت (كما في عُمان)، 3 وجبات في اليوم:
-//   فطور (اختياري)، غداء، عشاء — الغداء والعشاء أساسيان.
+// • عرض شهري: تقويم الشهر كاملاً، الأسبوع يبدأ السبت (كما في عُمان).
+// • وجبتان في اليوم فقط: غداء وعشاء. أي بيانات فطور مخزنة من قبل
+//   تبقى في البيانات كما هي ولا تُحذف، لكنها لا تُعرض ولا تُعدَّل.
 // • التخزين: localStorage بمفتاح masaar_meals_v1_u<user>،
 //   بالشكل { 'YYYY-MM-DD': { lunch: { text, status }, ... } }.
 // • الحالة: planned (مخطط) / ordered (تم الطلب) / eaten (تم الأكل).
@@ -3016,9 +3018,8 @@ function clearAll() {
 //   والمالية والأرشيف — ولا تُزامَن كلمات السر أو حالة القفل أبداً.
 // ─────────────────────────────────────────
 const MEAL_TYPES = [
-  { id: 'breakfast', name: 'الفطور', icon: 'ti-sunrise' },
-  { id: 'lunch',     name: 'الغداء', icon: 'ti-sun' },
-  { id: 'dinner',    name: 'العشاء', icon: 'ti-moon-stars' },
+  { id: 'lunch',  name: 'الغداء', icon: 'ti-sun' },
+  { id: 'dinner', name: 'العشاء', icon: 'ti-moon-stars' },
 ];
 const MEAL_DAY_NAMES = ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
 const MEAL_STATUSES = {
@@ -3042,6 +3043,16 @@ function sanitizeMeals(data) {
       const status = MEAL_STATUSES[m.status] ? m.status : 'planned';
       if (text.trim()) clean[t.id] = { text: text.trim(), status };
     });
+    // Preserve any other stored meal types (e.g. breakfast entered before)
+    // untouched: not shown or edited, but never deleted by sanitising.
+    Object.keys(day).forEach(k => {
+      if (MEAL_TYPES.some(t => t.id === k)) return;
+      const m = day[k];
+      if (!m || typeof m !== 'object') return;
+      const text = typeof m.text === 'string' ? m.text.slice(0, 120) : '';
+      const status = MEAL_STATUSES[m.status] ? m.status : 'planned';
+      if (text.trim()) clean[k] = { text: text.trim(), status };
+    });
     if (Object.keys(clean).length) out[d] = clean;
   });
   return out;
@@ -3054,16 +3065,20 @@ function mealsSave(data) {
   try { localStorage.setItem(mealsKey(), JSON.stringify(data || {})); } catch {}
   if (!window._applyingRemote) scheduleCloudPush('meals');
 }
-function mealsWeekStart(iso) {
-  // السبت هو أول أيام الأسبوع
-  const d = isoToDate(iso);
-  const dow = d.getUTCDay(); // 0=الأحد … 6=السبت
-  return addDays(iso, -((dow + 1) % 7));
+function mealsMonth() {
+  // الشهر المعروض حالياً (0-indexed)، الافتراضي: الشهر الحالي
+  if (UI.mealsMonthYear === null || UI.mealsMonthMonth === null) {
+    const t = today();
+    UI.mealsMonthYear = parseInt(t.slice(0, 4));
+    UI.mealsMonthMonth = parseInt(t.slice(5, 7)) - 1;
+  }
+  return { y: UI.mealsMonthYear, m: UI.mealsMonthMonth };
 }
-function mealsWeekDays() {
-  const start = UI.mealsWeekStart || (UI.mealsWeekStart = mealsWeekStart(today()));
+function mealsMonthDays() {
+  const { y, m } = mealsMonth();
+  const last = new Date(y, m + 1, 0).getDate();
   const days = [];
-  for (let i = 0; i < 7; i++) days.push(addDays(start, i));
+  for (let d = 1; d <= last; d++) days.push(`${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
   return days;
 }
 function setMeal(date, type, text) {
@@ -3098,17 +3113,26 @@ function clearMealsDay(date) {
   renderMeals();
   toast('✓ تم مسح وجبات اليوم');
 }
-function clearMealsWeek() {
-  if (!confirm('مسح جميع وجبات هذا الأسبوع؟')) return;
+function clearMealsMonth() {
+  if (!confirm('مسح جميع وجبات هذا الشهر؟')) return;
   const data = mealsLoad();
-  mealsWeekDays().forEach(d => delete data[d]);
+  mealsMonthDays().forEach(d => delete data[d]);
   mealsSave(data);
   renderMeals();
-  toast('✓ تم مسح وجبات الأسبوع');
+  toast('✓ تم مسح وجبات الشهر');
 }
-function changeMealsWeek(delta) {
-  if (delta === 0) { UI.mealsWeekStart = mealsWeekStart(today()); }
-  else { UI.mealsWeekStart = addDays(UI.mealsWeekStart || mealsWeekStart(today()), delta * 7); }
+function changeMealsMonth(delta) {
+  const { y, m } = mealsMonth();
+  if (delta === 0) {
+    const t = today();
+    UI.mealsMonthYear = parseInt(t.slice(0, 4));
+    UI.mealsMonthMonth = parseInt(t.slice(5, 7)) - 1;
+  } else {
+    let mm = m + delta, yy = y;
+    if (mm > 11) { mm = 0; yy++; }
+    if (mm < 0) { mm = 11; yy--; }
+    UI.mealsMonthYear = yy; UI.mealsMonthMonth = mm;
+  }
   renderMeals();
 }
 function copyMealsToTomorrow() {
@@ -3127,67 +3151,68 @@ function copyMealsToTomorrow() {
   toast(`✓ تم نسخ ${copied} ${copied === 1 ? 'وجبة' : 'وجبات'} إلى غداً`);
 }
 function renderMeals() {
-  const table = document.getElementById('mealsTable');
-  if (!table) return;
-  const days = mealsWeekDays();
+  const grid = document.getElementById('mealsMonthGrid');
+  if (!grid) return;
+  const { y, m } = mealsMonth();
+  const days = mealsMonthDays();
   const data = mealsLoad();
   const t = today(), tm = addDays(t, 1);
-  const start = days[0], end = days[6];
-  document.getElementById('mealsWeekTitle').textContent =
-    `الأسبوع: ${formatDateShort(start)} — ${formatDateShort(end)}`;
+  document.getElementById('mealsMonthTitle').textContent = `${MONTHS_F[m]} ${y}`;
   // بطاقة "غداً" السريعة
   const tmLabel = document.getElementById('mealsTomorrowLabel');
   if (tmLabel) tmLabel.textContent = `${MEAL_DAY_NAMES[(isoToDate(tm).getUTCDay() + 1) % 7]} ${formatDateShort(tm)}`;
   const tmBox = document.getElementById('mealsTomorrow');
   if (tmBox) {
     tmBox.innerHTML = MEAL_TYPES.map(ty => {
-      const m = (data[tm] || {})[ty.id];
-      const st = m ? MEAL_STATUSES[m.status] : null;
+      const mm = (data[tm] || {})[ty.id];
+      const st = mm ? MEAL_STATUSES[mm.status] : null;
       return `<div class="meals-tomorrow-item">
         <div class="mt-label"><i class="ti ${ty.icon}"></i> ${ty.name}</div>
-        <div class="mt-name">${m ? esc(m.text) : '— لم تحدد بعد'}</div>
+        <div class="mt-name">${mm ? esc(mm.text) : '— لم تحدد بعد'}</div>
         ${st ? `<div style="margin-top:6px"><span class="badge ${st.cls}"><i class="ti ${st.icon}"></i> ${st.label}</span></div>` : ''}
       </div>`;
     }).join('');
   }
-  // إحصاءات الأسبوع
+  // إحصاءات الشهر
   let planned = 0, ordered = 0, eaten = 0;
-  days.forEach(d => Object.values(data[d] || {}).forEach(m => {
-    if (m.status === 'ordered') ordered++;
-    else if (m.status === 'eaten') eaten++;
+  days.forEach(d => Object.values(data[d] || {}).forEach(mm => {
+    if (mm.status === 'ordered') ordered++;
+    else if (mm.status === 'eaten') eaten++;
     else planned++;
   }));
-  const stats = document.getElementById('mealsWeekStats');
+  const stats = document.getElementById('mealsMonthStats');
   if (stats) stats.textContent = `مخطط: ${planned} · تم الطلب: ${ordered} · تم الأكل: ${eaten}`;
-  // الجدول
-  let html = '<thead><tr><th style="min-width:90px">الوجبة</th>';
-  days.forEach((d, i) => {
-    const cls = d === t ? 'today-col' : (d === tm ? 'tomorrow-col' : '');
+  // شبكة الشهر: الأسبوع يبدأ السبت
+  const firstDow = new Date(Date.UTC(y, m, 1)).getUTCDay(); // 0=الأحد … 6=السبت
+  const offset = (firstDow + 1) % 7; // خلايا فارغة قبل أول يوم (السبت أولاً)
+  let html = MEAL_DAY_NAMES.map(n => `<div class="meals-month-dh">${n}</div>`).join('');
+  for (let i = 0; i < offset; i++) html += '<div class="meals-day empty"></div>';
+  days.forEach(d => {
+    const dayNum = parseInt(d.slice(8, 10), 10);
+    const wd = MEAL_DAY_NAMES[(isoToDate(d).getUTCDay() + 1) % 7];
+    const cls = d === t ? ' today-day' : (d === tm ? ' tomorrow-day' : '');
     const tag = d === t ? ' <span class="badge b-a" style="font-size:9.5px">اليوم</span>'
       : (d === tm ? ' <span class="badge b-am" style="font-size:9.5px">غداً</span>' : '');
-    html += `<th class="${cls}">${MEAL_DAY_NAMES[i]}${tag}<div style="font-size:11px;color:var(--mu2);font-weight:400;margin-top:2px">${formatDateShort(d)}</div>
-      <button class="meals-day-clear" title="مسح وجبات هذا اليوم" onclick="clearMealsDay('${d}')"><i class="ti ti-trash"></i> مسح</button></th>`;
-  });
-  html += '</tr></thead><tbody>';
-  MEAL_TYPES.forEach(ty => {
-    html += `<tr><td class="meal-row-label"><i class="ti ${ty.icon}"></i>${ty.name}</td>`;
-    days.forEach(d => {
-      const m = (data[d] || {})[ty.id];
-      const cls = d === t ? 'today-col' : (d === tm ? 'tomorrow-col' : '');
+    html += `<div class="meals-day${cls}">
+      <div class="meals-day-head"><div class="meals-day-num">${dayNum}${tag}<small>${wd}</small></div>
+      <button class="meals-day-clear" title="مسح وجبات هذا اليوم" onclick="clearMealsDay('${d}')"><i class="ti ti-trash"></i></button></div>`;
+    MEAL_TYPES.forEach(ty => {
+      const mm = (data[d] || {})[ty.id];
       const opts = Object.keys(MEAL_STATUSES).map(k =>
-        `<option value="${k}" ${m && m.status === k ? 'selected' : ''}>${MEAL_STATUSES[k].label}</option>`).join('');
-      html += `<td class="${cls}"><div class="meal-cell">
-        <input type="text" placeholder="اكتب الوجبة…" value="${m ? esc(m.text) : ''}"
+        `<option value="${k}" ${mm && mm.status === k ? 'selected' : ''}>${MEAL_STATUSES[k].label}</option>`).join('');
+      html += `<div class="meal-cell">
+        <div class="meal-row-label"><i class="ti ${ty.icon}"></i>${ty.name}</div>
+        <input type="text" placeholder="اكتب الوجبة…" value="${mm ? esc(mm.text) : ''}"
           onchange="setMeal('${d}', '${ty.id}', this.value)" aria-label="${ty.name} ${d}">
         <select onchange="setMealStatus('${d}', '${ty.id}', this.value)" aria-label="حالة ${ty.name} ${d}">${opts}</select>
-      </div></td>`;
+      </div>`;
     });
-    html += '</tr>';
+    html += '</div>';
   });
-  html += '</tbody>';
-  table.innerHTML = html;
+  const trailing = (7 - ((offset + days.length) % 7)) % 7;
+  for (let i = 0; i < trailing; i++) html += '<div class="meals-day empty"></div>';
+  grid.innerHTML = html;
 }
-
 // ─────────────────────────────────────────
 // DATE UTILS
 // ─────────────────────────────────────────
