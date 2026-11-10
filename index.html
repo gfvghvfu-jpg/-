@@ -846,23 +846,6 @@ input[type=range]::-webkit-slider-thumb{
 .check-anim{animation:checkBounce 0.35s cubic-bezier(0.34,1.56,0.64,1)}
 
 /* ═══ USER SELECTOR ═══ */
-.user-opt{
-  flex:1;padding:10px 8px;border-radius:12px;border:1.5px solid rgba(255,255,255,0.07);
-  background:rgba(255,255,255,0.03);cursor:pointer;text-align:center;
-  transition:var(--tr-spring);
-}
-.user-opt:hover{border-color:rgba(110,100,255,0.25);background:rgba(110,100,255,0.06)}
-.user-opt.sel{border-color:var(--a);background:rgba(110,100,255,0.1);box-shadow:0 0 0 3px rgba(110,100,255,0.1)}
-.user-opt-av{
-  width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-  font-size:17px;font-weight:800;color:#fff;margin:0 auto 6px;
-  box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:transform 0.25s;
-}
-.user-opt:hover .user-opt-av{transform:scale(1.1)}
-.user-opt-name{font-size:12px;font-weight:600;color:var(--tx2)}
-.lock-users{display:flex;gap:10px;margin-bottom:16px}
-.lock-users .user-opt{flex:1}
-.user-opt.sel .user-opt-name{color:var(--a2)}
 
 /* ═══ PERIOD BADGES ═══ */
 .period-sun{color:#ffb830;background:rgba(255,184,48,0.12);padding:2px 8px;border-radius:99px;font-size:10.5px;font-weight:600}
@@ -1049,17 +1032,6 @@ input[type=range]::-webkit-slider-thumb{
 
     <!-- Login Form -->
     <div id="loginForm">
-      <!-- ملفان شخصيان: اختيار الملف قبل كلمة السر -->
-      <div class="lock-users" id="lockUsers" role="tablist" aria-label="اختيار الملف">
-        <button class="user-opt" type="button" role="tab" onclick="selectUser(1)" aria-label="ملف محمود">
-          <div class="user-opt-av" style="background:linear-gradient(135deg,#6e64ff,#9d96ff)">م</div>
-          <div class="user-opt-name">محمود</div>
-        </button>
-        <button class="user-opt" type="button" role="tab" onclick="selectUser(2)" aria-label="ملف عمر">
-          <div class="user-opt-av" style="background:linear-gradient(135deg,#28d4f5,#6ee7ff)">ع</div>
-          <div class="user-opt-name">عمر</div>
-        </button>
-      </div>
       <div class="lock-form-label">
         <i class="ti ti-lock" style="color:var(--a)"></i>
         كلمة السر
@@ -1980,12 +1952,8 @@ input[type=range]::-webkit-slider-thumb{
 // ─────────────────────────────────────────
 const USERS = {
   1: { name: 'محمود', nameEn: 'Mahmood', avatar: 'م', password: 'Oman@123', color: 'linear-gradient(135deg,#6e64ff,#28d4f5)', storageKey: 'masaar_pro_v3', secKey: 'masaar_security_u1' },
-  2: { name: 'عمر',   nameEn: 'Omar',    avatar: 'ع', password: 'amr14444', color: 'linear-gradient(135deg,#ff7b3d,#f45cd4)', storageKey: 'masaar_pro_v3_u2', secKey: 'masaar_security_u2' },
 };
-let CURRENT_USER = (function () {
-  // الملف المختار سابقاً (مفتاح مستقل، لا يغيّر أي شكل بيانات قائم)
-  try { return Number(localStorage.getItem('masaar_active_user')) === 2 ? 2 : 1; } catch { return 1; }
-})();
+let CURRENT_USER = 1;
 
 const SECURITY = {
   MAX_ATTEMPTS: 5,
@@ -2036,39 +2004,12 @@ let lockCountdownTimer = null;
 
 function initLockScreen() {
   generateLockParticles();
-  // اعكس الملف المختار في الأزرار (الافتراضي: محمود)
-  document.querySelectorAll('.user-opt').forEach((el, i) => el.classList.toggle('sel', i + 1 === CURRENT_USER));
   if (SECURITY.isLocked()) { showLockedState(); return; }
   const s = SECURITY.getState();
   if (s.unlocked) { unlockApp(false); return; }
   updateAttemptsUI();
 }
 
-function selectUser(uid) {
-  // Restart clock when unlocking
-  if (!window._clockInterval) window._clockInterval = setInterval(updateClock, 15000);
-  CURRENT_USER = uid;
-  try { localStorage.setItem('masaar_active_user', String(uid)); } catch {}
-  _recoveryVerified = false;
-  document.querySelectorAll('.user-opt').forEach((el,i) => el.classList.toggle('sel', i+1===uid));
-  // reset form state per user
-  const pwInp = document.getElementById('pwInput');
-  const errMsg = document.getElementById('errMsg');
-  const warnMsg = document.getElementById('warnMsg');
-  const loginBtn = document.getElementById('loginBtn');
-  if (pwInp) pwInp.value = '';
-  if (errMsg) errMsg.classList.remove('show');
-  if (warnMsg) warnMsg.classList.remove('show');
-  if (loginBtn) { loginBtn.disabled = false; loginBtn.innerHTML = '<i class="ti ti-lock-open"></i>دخول'; }
-  if (SECURITY.isLocked()) { showLockedState(); }
-  else {
-    const lf = document.getElementById('loginForm');
-    const ls = document.getElementById('lockedState');
-    if (lf) lf.style.display = 'block';
-    if (ls) ls.classList.remove('show');
-    updateAttemptsUI();
-  }
-}
 
 function generateLockParticles() {
   const container = document.getElementById('lockParticles');
@@ -2527,7 +2468,7 @@ const CHARTS = {};
 // ───────────────────────────────────────────────────────────
 // • Firebase Auth (تسجيل دخول بجوجل) + Cloud Firestore.
 // • مستند واحد لكل مستخدم جوجل + ملف مسار المحلي:
-//   المجموعة masaar_users، والمعرّف uid_u1 أو uid_u2.
+//   المجموعة masaar_users، والمعرّف uid_u1 (ملف واحد الآن).
 // • localStorage يبقى المصدر المحلي ويعمل دون إنترنت.
 // • لا تُزامَن أبداً: كلمات المرور المحلية، حالة القفل،
 //   ومفاتيح التحذيرات المؤقتة — فقط العادات والمالية والأرشيف.
@@ -3605,7 +3546,8 @@ function finMonthOverMonth(state) {
   if (!curEntries.length || !prevEntries.length) return null;
   const curAvg  = mean(curEntries.map(([,v]) => v));
   const prevAvg = mean(prevEntries.map(([,v]) => v));
-  const delta   = parseFloat(((curAvg - prevAvg) / (prevAvg || 1) * 100).toFixed(1));
+  if (prevAvg <= 0) return null; // لا نسبة بدون أساس للمقارنة
+  const delta   = parseFloat(((curAvg - prevAvg) / prevAvg * 100).toFixed(1));
   return { curAvg: parseFloat(curAvg.toFixed(3)), prevAvg: parseFloat(prevAvg.toFixed(3)), delta };
 }
 
@@ -3881,7 +3823,7 @@ function drawWeekly() {
   const days = getLast(60);
   // إصلاح: استخدام متوسط معدل الإنجاز الفعلي بدل getDayRate > 0 (مضلل)
   const avg = WEEKDAYS_S.map((_, i) => {
-    const wDays = days.filter(d => isoToDate(d).getDay() === i);
+    const wDays = days.filter(d => isoToDate(d).getUTCDay() === i);
     return wDays.length ? Math.round(wDays.reduce((a, d) => a + getDayRate(d), 0) / wDays.length) : 0;
   });
   CHARTS['c-weekly'] = new Chart(ctx, {
@@ -4450,7 +4392,7 @@ function renderFinance() {
   const remaining   = todaySpent !== null
     ? parseFloat((todayBudget - todaySpent).toFixed(3))
     : todayBudget;
-  const pct = base > 0 ? Math.min(1, (todaySpent || 0) / base) : 0;
+  const pct = todayBudget > 0 ? Math.min(1, (todaySpent || 0) / todayBudget) : 0;
 
   // ── حساب الفترة المالية أولاً (مطلوب في كل ما يليه) ──
   const { start: pStart, end: pEnd } = finPeriodRange(state);
@@ -5117,7 +5059,7 @@ function buildAnnualHeatmap(filterHid) {
   // إصلاح: استخدام addDays() بدل new Date()+setDate() في الحلقة
   const startStr = addDays(todayStr, -364);
   const weeks = []; let curWeek = [];
-  const firstDow = isoToDate(startStr).getDay();
+  const firstDow = isoToDate(startStr).getUTCDay();
   for (let i = 0; i < firstDow; i++) curWeek.push(null);
   let cur = startStr;
   while (cur <= todayStr) {
@@ -5140,7 +5082,7 @@ function buildAnnualHeatmap(filterHid) {
   weeks.forEach((w, wi) => {
     const firstValid = w.find(d => d !== null && isoToDate(d) <= todayDate); // إصلاح: today_d → todayDate
     if (firstValid) {
-      const m = isoToDate(firstValid).getMonth();
+      const m = isoToDate(firstValid).getUTCMonth();
       if (m !== lastMonth) { monthLabels.push({ idx: wi, name: MONTHS_F[m] }); lastMonth = m; }
       else monthLabels.push({ idx: wi, name: '' });
     } else monthLabels.push({ idx: wi, name: '' });
@@ -5289,6 +5231,7 @@ function changeCalMonth(dir) {
   if (UI.calMonth > 11) { UI.calMonth = 0; UI.calYear++; }
   if (UI.calMonth < 0) { UI.calMonth = 11; UI.calYear--; }
   buildCalendarGrid();
+  redrawCalendarChart();
 }
 
 function goToTodayCalendar() {
@@ -5296,6 +5239,13 @@ function goToTodayCalendar() {
   UI.calYear  = parseInt(t.slice(0, 4));
   UI.calMonth = parseInt(t.slice(5, 7)) - 1;
   buildCalendarGrid();
+  redrawCalendarChart();
+}
+
+// the monthly chart must follow the month being browsed
+function redrawCalendarChart() {
+  const calFilter = document.getElementById('calFilter');
+  drawMonthlyChart((calFilter && calFilter.value) || 'all');
 }
 
 // ─────────────────────────────────────────
@@ -5527,7 +5477,7 @@ function renderLoginHistory() {
   const el = document.getElementById('loginHistoryTable'); if (!el) return;
   // Merge history from both users
   const allHistory = [];
-  [1, 2].forEach(uid => {
+  Object.keys(USERS).map(Number).forEach(uid => {
     const key = USERS[uid].secKey;
     try {
       const s = JSON.parse(localStorage.getItem(key) || '{}');
@@ -6515,16 +6465,44 @@ function dismissArchiveBanner() {
   setTimeout(() => b.remove(), 300);
 }
 
+// ─────────────────────────────────────────
+// REMOVED PROFILE CLEANUP (u2)
+// ─────────────────────────────────────────
+// عمر's profile no longer exists. His local data is deleted once; the flag
+// keeps this from running on every load. Mahmoud's keys are untouched.
+function purgeRemovedProfile() {
+  const FLAG = 'masaar_u2_purged_v1';
+  try { if (localStorage.getItem(FLAG) === '1') return; } catch { return; }
+  try {
+    const doomed = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (k.endsWith('_u2') || k === 'masaar_active_user') doomed.push(k);
+    }
+    doomed.forEach(k => { try { localStorage.removeItem(k); } catch {} });
+    const rawPw = localStorage.getItem('masaar_pw_store');
+    if (rawPw) {
+      const store = JSON.parse(rawPw);
+      let touched = false;
+      if (store && '2' in store) { delete store['2']; touched = true; }
+      if (touched) localStorage.setItem('masaar_pw_store', JSON.stringify(store));
+    }
+    localStorage.setItem(FLAG, '1');
+    console.log('purged removed profile keys:', doomed.length);
+  } catch (e) { console.error('purge failed', e); }
+}
+
 function loadSavedPasswords() {
   try {
     const pw = JSON.parse(localStorage.getItem('masaar_pw_store') || '{}');
     // إصلاح: التحقق بكلا النوعين (رقم وstring) لأن JSON يحوّل المفاتيح لـ string
     if (pw[1] || pw['1']) USERS[1].password = pw[1] || pw['1'];
-    if (pw[2] || pw['2']) USERS[2].password = pw[2] || pw['2'];
   } catch {}
 }
 initBgCanvas();
 loadSavedPasswords();
+purgeRemovedProfile();
 // If the user just came back from a Google redirect sign-in started
 // from "forgot password", finish the recovery instead of the lock screen.
 if (typeof handleRecoveryRedirect === 'function') {
