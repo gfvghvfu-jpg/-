@@ -4321,7 +4321,10 @@ function finPlan(state) {
   const daysLeft = Math.max(1, daysInPeriod - elapsed);
   const base = avail / daysInPeriod;              // المعدل المتساوي للفترة
   const todayBudget = remaining / daysLeft;       // ما تبقى موزعاً على الأيام الباقية
-  const derivedJar = base * elapsed - spentSoFar; // المفروض توفيره حتى أمس − المصروف
+  // التوفير لا يُحتسب إلا عن الأيام المسجّلة فعلاً: يوم بلا سجل ليس توفيراً
+  let loggedDays = 0;
+  Object.keys(state.log || {}).forEach(k => { if (k >= start && k <= yesterday) loggedDays++; });
+  const derivedJar = base * loggedDays - spentSoFar;
   const withdrawn = Number(state.tankWithdrawn) || 0;
   return {
     avail,
