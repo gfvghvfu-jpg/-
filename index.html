@@ -993,28 +993,36 @@ input[type=range]::-webkit-slider-thumb{
 .sync-dot.busy{background:#ffb830;box-shadow:0 0 8px rgba(255,184,48,0.7);animation:syncPulse 1.2s infinite}
 .sync-dot.off{background:#ff4f6d}
 @keyframes syncPulse{50%{opacity:0.45}}
-/* ── Meals schedule — monthly grid ── */
-.meals-month-wrap{overflow-x:auto;border-radius:var(--r2)}
-.meals-month-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;min-width:720px}
-.meals-month-dh{font-size:11.5px;font-weight:700;color:var(--tx2);text-align:center;padding:4px 0}
-.meals-day{background:var(--s2);border:1px solid var(--bd);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:7px;min-height:158px}
-.meals-day.empty{background:transparent;border-style:dashed;opacity:0.35;min-height:158px}
-.meals-day.today-day{border-color:rgba(110,100,255,0.55);background:rgba(110,100,255,0.07)}
-.meals-day.tomorrow-day{border-color:rgba(40,212,245,0.4);background:rgba(40,212,245,0.04)}
-.meals-day-head{display:flex;align-items:flex-start;justify-content:space-between;gap:4px}
-.meals-day-num{font-weight:800;font-size:14px;line-height:1.2}
-.meals-day-num small{display:block;font-size:10.5px;color:var(--mu2);font-weight:400}
-.meal-cell{display:flex;flex-direction:column;gap:5px}
-.meal-cell input{width:100%;height:32px;font-size:12px;padding:0 9px}
-.meal-cell select{width:100%;height:28px;font-size:11px;padding:0 7px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:var(--tx);font-family:var(--font);outline:none;cursor:pointer}
-.meal-row-label{font-weight:700;font-size:11.5px;color:var(--tx2);white-space:nowrap}
-.meal-row-label i{margin-left:4px;color:var(--a2)}
+/* ── Meals — simple vertical list ── */
+/* BUG FIX note: the old monthly grid was 720px wide inside a horizontal
+   scroller; dragging it sideways triggered the global swipe navigation and
+   threw the user to Settings/Journal. The list below needs no horizontal
+   scrolling at all, and swipe navigation is also disabled on this page. */
 .meals-tomorrow{display:flex;flex-wrap:wrap;gap:10px}
 .meals-tomorrow-item{flex:1;min-width:140px;background:var(--s3);border:1px solid var(--bd);border-radius:var(--r2);padding:12px 14px}
 .meals-tomorrow-item .mt-label{font-size:11px;color:var(--mu2);font-weight:700;margin-bottom:4px}
 .meals-tomorrow-item .mt-name{font-size:14px;font-weight:700}
-.meals-day-clear{background:none;border:none;color:var(--mu);cursor:pointer;font-size:11px;padding:2px 4px;flex-shrink:0}
+.meals-list{display:flex;flex-direction:column;gap:12px}
+.meals-day-card{background:var(--s2);border:1px solid var(--bd);border-radius:16px;padding:16px}
+.meals-day-card.today-day{border-color:rgba(110,100,255,0.55);background:rgba(110,100,255,0.07)}
+.meals-day-card.tomorrow-day{border-color:rgba(40,212,245,0.4);background:rgba(40,212,245,0.04)}
+.meals-day-card.past-day{opacity:0.6}
+.meals-day-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+.meals-day-title{font-weight:800;font-size:16px;line-height:1.3}
+.meals-day-title small{display:block;font-size:12px;color:var(--mu2);font-weight:400}
+.meals-day-clear{background:none;border:none;color:var(--mu);cursor:pointer;font-size:14px;padding:6px;flex-shrink:0}
 .meals-day-clear:hover{color:var(--re)}
+.meal-row{display:flex;flex-direction:column;gap:8px;padding:12px 0;border-top:1px solid var(--bd)}
+.meal-row:first-of-type{border-top:none;padding-top:2px}
+.meal-row-label{font-weight:700;font-size:14px;color:var(--tx2)}
+.meal-row-label i{margin-left:5px;color:var(--a2)}
+.meal-row input{width:100%;min-height:46px;font-size:15px;padding:10px 12px}
+.meal-chips{display:flex;gap:6px;flex-wrap:wrap}
+.meal-chip{border:1px solid var(--bd);background:var(--s3);border-radius:99px;padding:8px 14px;font-size:12.5px;font-weight:700;color:var(--tx2);cursor:pointer;font-family:var(--font);min-height:38px}
+.meal-chip.on-planned{border-color:rgba(110,100,255,0.6);background:rgba(110,100,255,0.15);color:#c9c4ff}
+.meal-chip.on-ordered{border-color:rgba(255,184,48,0.6);background:rgba(255,184,48,0.12);color:#ffd27a}
+.meal-chip.on-eaten{border-color:rgba(34,217,122,0.6);background:rgba(34,217,122,0.12);color:#7fe9b4}
+.meals-past-label{font-size:12px;color:var(--mu2);font-weight:700;margin:6px 2px 0}
 </style>
 </head>
 <body>
@@ -1703,12 +1711,9 @@ input[type=range]::-webkit-slider-thumb{
     <div class="meals-tomorrow" id="mealsTomorrow"></div>
   </div>
   <div class="card">
-    <div class="ct"><i class="ti ti-tools-kitchen-2 ct-icon"></i><span id="mealsMonthTitle"></span><span class="ct-right ct-sub" id="mealsMonthStats"></span></div>
-    <div class="meals-month-wrap"><div class="meals-month-grid" id="mealsMonthGrid"></div></div>
-    <div style="display:flex;justify-content:flex-end;margin-top:14px">
-      <button class="btn btn-sm btn-danger" onclick="clearMealsMonth()"><i class="ti ti-trash"></i>مسح وجبات هذا الشهر</button>
-    </div>
-    <div style="font-size:11.5px;color:var(--mu2);margin-top:10px;line-height:1.8">اكتب اسم الوجبة أو المطعم في الخانة، وغيّر الحالة إلى «تم الطلب» بعد الطلب و«تم الأكل» بعد الأكل. تُحفظ الوجبات تلقائياً وتتزامن بين الهاتف واللابتوب عند تسجيل الدخول بجوجل.</div>
+    <div class="ct"><i class="ti ti-tools-kitchen-2 ct-icon"></i><span id="mealsMonthTitle"></span></div>
+    <div class="meals-list" id="mealsList"></div>
+    <div style="font-size:12px;color:var(--mu2);margin-top:14px;line-height:1.8">اكتب اسم الوجبة أو المطعم في الخانة، واضغط على الحالة بعد الطلب والأكل. تُحفظ الوجبات تلقائياً وتتزامن بين الهاتف واللابتوب عند تسجيل الدخول بجوجل.</div>
   </div>
 </section>
 
@@ -3091,19 +3096,21 @@ function setMeal(date, type, text) {
     data[date][type] = { text: clean, status: (data[date][type] && data[date][type].status) || 'planned' };
   }
   mealsSave(data);
-  renderMeals();
+  // No full re-render here: rebuilding the list would drop the keyboard and
+  // lose the user's place while typing. Only the "tomorrow" card changes.
+  renderMealsTomorrow();
 }
 function setMealStatus(date, type, status) {
   if (!MEAL_STATUSES[status]) return;
   const data = mealsLoad();
   if (!data[date] || !data[date][type] || !data[date][type].text) {
     toast('اكتب اسم الوجبة أولاً');
-    renderMeals();
     return;
   }
   data[date][type].status = status;
   mealsSave(data);
-  renderMeals();
+  updateMealChips(date, type, status);
+  renderMealsTomorrow();
 }
 function clearMealsDay(date) {
   if (!confirm('مسح وجبات هذا اليوم؟')) return;
@@ -3122,6 +3129,10 @@ function clearMealsMonth() {
   toast('✓ تم مسح وجبات الشهر');
 }
 function changeMealsMonth(delta) {
+  // Blur any focused meal field first, otherwise renderMeals() (which
+  // deliberately skips rebuilding while the user is typing) would keep
+  // showing the old month after a deliberate month change.
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   const { y, m } = mealsMonth();
   if (delta === 0) {
     const t = today();
@@ -3150,68 +3161,79 @@ function copyMealsToTomorrow() {
   renderMeals();
   toast(`✓ تم نسخ ${copied} ${copied === 1 ? 'وجبة' : 'وجبات'} إلى غداً`);
 }
+function renderMealsTomorrow() {
+  const t = today(), tm = addDays(t, 1);
+  const data = mealsLoad();
+  const tmLabel = document.getElementById('mealsTomorrowLabel');
+  if (tmLabel) tmLabel.textContent = `${MEAL_DAY_NAMES[(isoToDate(tm).getUTCDay() + 1) % 7]} ${formatDateShort(tm)}`;
+  const tmBox = document.getElementById('mealsTomorrow');
+  if (!tmBox) return;
+  tmBox.innerHTML = MEAL_TYPES.map(ty => {
+    const mm = (data[tm] || {})[ty.id];
+    const st = mm ? MEAL_STATUSES[mm.status] : null;
+    return `<div class="meals-tomorrow-item">
+      <div class="mt-label"><i class="ti ${ty.icon}"></i> ${ty.name}</div>
+      <div class="mt-name">${mm ? esc(mm.text) : '— لم تحدد بعد'}</div>
+      ${st ? `<div style="margin-top:6px"><span class="badge ${st.cls}"><i class="ti ${st.icon}"></i> ${st.label}</span></div>` : ''}
+    </div>`;
+  }).join('');
+}
+function updateMealChips(date, type, status) {
+  document.querySelectorAll(`[data-meal-chip][data-date="${date}"][data-type="${type}"]`).forEach(btn => {
+    btn.classList.remove('on-planned', 'on-ordered', 'on-eaten');
+    if (btn.dataset.status === status) btn.classList.add('on-' + status);
+  });
+}
 function renderMeals() {
-  const grid = document.getElementById('mealsMonthGrid');
-  if (!grid) return;
+  const list = document.getElementById('mealsList');
+  if (!list) return;
+  // Do not rebuild the list while the user is typing in it (e.g. a cloud
+  // sync arriving from the other device): rebuilding would close the
+  // keyboard and lose their place. Only the "tomorrow" card updates.
+  const ae = document.activeElement;
+  if (ae && ae.tagName === 'INPUT' && list.contains(ae)) { renderMealsTomorrow(); return; }
   const { y, m } = mealsMonth();
   const days = mealsMonthDays();
   const data = mealsLoad();
   const t = today(), tm = addDays(t, 1);
   document.getElementById('mealsMonthTitle').textContent = `${MONTHS_F[m]} ${y}`;
-  // بطاقة "غداً" السريعة
-  const tmLabel = document.getElementById('mealsTomorrowLabel');
-  if (tmLabel) tmLabel.textContent = `${MEAL_DAY_NAMES[(isoToDate(tm).getUTCDay() + 1) % 7]} ${formatDateShort(tm)}`;
-  const tmBox = document.getElementById('mealsTomorrow');
-  if (tmBox) {
-    tmBox.innerHTML = MEAL_TYPES.map(ty => {
-      const mm = (data[tm] || {})[ty.id];
-      const st = mm ? MEAL_STATUSES[mm.status] : null;
-      return `<div class="meals-tomorrow-item">
-        <div class="mt-label"><i class="ti ${ty.icon}"></i> ${ty.name}</div>
-        <div class="mt-name">${mm ? esc(mm.text) : '— لم تحدد بعد'}</div>
-        ${st ? `<div style="margin-top:6px"><span class="badge ${st.cls}"><i class="ti ${st.icon}"></i> ${st.label}</span></div>` : ''}
-      </div>`;
-    }).join('');
+  renderMealsTomorrow();
+  // Order: today first, then tomorrow, then the coming days of the month,
+  // then past days (dimmed) at the end. Other months: chronological.
+  const viewingCurrent = (t.slice(0, 7) === `${y}-${String(m + 1).padStart(2, '0')}`);
+  let ordered = days.slice();
+  if (viewingCurrent) {
+    const future = days.filter(d => d > tm);
+    const past = days.filter(d => d < t);
+    ordered = [t, tm, ...future, ...past];
   }
-  // إحصاءات الشهر
-  let planned = 0, ordered = 0, eaten = 0;
-  days.forEach(d => Object.values(data[d] || {}).forEach(mm => {
-    if (mm.status === 'ordered') ordered++;
-    else if (mm.status === 'eaten') eaten++;
-    else planned++;
-  }));
-  const stats = document.getElementById('mealsMonthStats');
-  if (stats) stats.textContent = `مخطط: ${planned} · تم الطلب: ${ordered} · تم الأكل: ${eaten}`;
-  // شبكة الشهر: الأسبوع يبدأ السبت
-  const firstDow = new Date(Date.UTC(y, m, 1)).getUTCDay(); // 0=الأحد … 6=السبت
-  const offset = (firstDow + 1) % 7; // خلايا فارغة قبل أول يوم (السبت أولاً)
-  let html = MEAL_DAY_NAMES.map(n => `<div class="meals-month-dh">${n}</div>`).join('');
-  for (let i = 0; i < offset; i++) html += '<div class="meals-day empty"></div>';
-  days.forEach(d => {
+  let html = '';
+  let pastLabelShown = false;
+  ordered.forEach(d => {
+    const isPast = d < t;
+    if (isPast && !pastLabelShown && viewingCurrent) { html += '<div class="meals-past-label">أيام مضت</div>'; pastLabelShown = true; }
     const dayNum = parseInt(d.slice(8, 10), 10);
     const wd = MEAL_DAY_NAMES[(isoToDate(d).getUTCDay() + 1) % 7];
-    const cls = d === t ? ' today-day' : (d === tm ? ' tomorrow-day' : '');
-    const tag = d === t ? ' <span class="badge b-a" style="font-size:9.5px">اليوم</span>'
-      : (d === tm ? ' <span class="badge b-am" style="font-size:9.5px">غداً</span>' : '');
-    html += `<div class="meals-day${cls}">
-      <div class="meals-day-head"><div class="meals-day-num">${dayNum}${tag}<small>${wd}</small></div>
+    const cls = d === t ? ' today-day' : (d === tm ? ' tomorrow-day' : (isPast ? ' past-day' : ''));
+    const tag = d === t ? ' <span class="badge b-a" style="font-size:10px">اليوم</span>'
+      : (d === tm ? ' <span class="badge b-am" style="font-size:10px">غداً</span>' : '');
+    html += `<div class="meals-day-card${cls}">
+      <div class="meals-day-head"><div class="meals-day-title">${wd} ${dayNum} ${MONTHS_F[m]}${tag}<small>${formatDateShort(d)}</small></div>
       <button class="meals-day-clear" title="مسح وجبات هذا اليوم" onclick="clearMealsDay('${d}')"><i class="ti ti-trash"></i></button></div>`;
     MEAL_TYPES.forEach(ty => {
       const mm = (data[d] || {})[ty.id];
-      const opts = Object.keys(MEAL_STATUSES).map(k =>
-        `<option value="${k}" ${mm && mm.status === k ? 'selected' : ''}>${MEAL_STATUSES[k].label}</option>`).join('');
-      html += `<div class="meal-cell">
+      const chips = Object.keys(MEAL_STATUSES).map(k =>
+        `<button type="button" class="meal-chip${mm && mm.status === k ? ' on-' + k : ''}" data-meal-chip data-date="${d}" data-type="${ty.id}" data-status="${k}" onclick="setMealStatus('${d}', '${ty.id}', '${k}')">${MEAL_STATUSES[k].label}</button>`).join('');
+      html += `<div class="meal-row">
         <div class="meal-row-label"><i class="ti ${ty.icon}"></i>${ty.name}</div>
         <input type="text" placeholder="اكتب الوجبة…" value="${mm ? esc(mm.text) : ''}"
           onchange="setMeal('${d}', '${ty.id}', this.value)" aria-label="${ty.name} ${d}">
-        <select onchange="setMealStatus('${d}', '${ty.id}', this.value)" aria-label="حالة ${ty.name} ${d}">${opts}</select>
+        <div class="meal-chips">${chips}</div>
       </div>`;
     });
     html += '</div>';
   });
-  const trailing = (7 - ((offset + days.length) % 7)) % 7;
-  for (let i = 0; i < trailing; i++) html += '<div class="meals-day empty"></div>';
-  grid.innerHTML = html;
+  list.innerHTML = html;
 }
 // ─────────────────────────────────────────
 // DATE UTILS
@@ -6092,9 +6114,21 @@ function countUp(el, target, duration = 800, suffix = '') {
 // ─────────────────────────────────────────
 (function initSwipe() {
   const pages = ['dashboard','habits','checkin','analytics','finance','calendar','journal','meals','settings'];
-  let tx = 0, ty = 0;
-  document.addEventListener('touchstart', e => { tx = e.touches[0].clientX; ty = e.touches[0].clientY; }, { passive: true });
+  let tx = 0, ty = 0, tTarget = null;
+  document.addEventListener('touchstart', e => { tx = e.touches[0].clientX; ty = e.touches[0].clientY; tTarget = e.target; }, { passive: true });
   document.addEventListener('touchend', e => {
+    // BUG FIX (2026-11-10): a drag that starts in a form field, or inside a
+    // horizontally scrollable area, is NOT page navigation. The old meals
+    // month grid was 720px wide inside a horizontal scroller, so scrolling
+    // it sideways on the phone always fired this handler and jumped the user
+    // from Meals (index 7) to Settings (swipe left) or Journal (swipe right).
+    if (tTarget && tTarget.closest && tTarget.closest('input,textarea,select,[contenteditable]')) return;
+    if (UI.page === 'meals') return; // meals is a vertical list; no swipe nav here
+    let el = tTarget;
+    while (el && el !== document.body) {
+      if (el.scrollWidth > el.clientWidth + 10) return; // horizontal scroller
+      el = el.parentElement;
+    }
     const dx = e.changedTouches[0].clientX - tx;
     const dy = e.changedTouches[0].clientY - ty;
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return; // not a horizontal swipe
